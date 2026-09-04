@@ -635,6 +635,10 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
           { label: 'Client', value: client.name },
           { label: 'Téléphone', value: client.phone || '—' },
           { label: 'Adresse', value: client.address || '—' },
+          ...(client.rc ? [{ label: 'R.C N°', value: client.rc }] : []),
+          ...(client.nif ? [{ label: 'NIF', value: client.nif }] : []),
+          ...(client.nis ? [{ label: 'NIS', value: client.nis }] : []),
+          ...(client.article ? [{ label: 'N° Article', value: client.article }] : []),
           { label: 'Période', value: periodLabel },
         ],
         kpis: [
