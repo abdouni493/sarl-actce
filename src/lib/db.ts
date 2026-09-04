@@ -143,8 +143,23 @@ const toSupplier = (r: any): Supplier => ({
 
 const toClient = (r: any): Client => ({
   id: r.id, name: r.name, phone: r.phone ?? '', address: r.address ?? '', note: r.note ?? '',
+  rc: r.rc ?? '', nif: r.nif ?? '', nis: r.nis ?? '', article: r.article ?? '',
   creditAmount: num(r.credit_amount),
 });
+
+/** Only the keys actually present are sent, so a partial edit never wipes a column. */
+const fromClient = (c: Partial<Client>) => {
+  const row: Record<string, any> = {};
+  if (c.name !== undefined) row.name = c.name;
+  if (c.phone !== undefined) row.phone = c.phone;
+  if (c.address !== undefined) row.address = c.address;
+  if (c.note !== undefined) row.note = c.note;
+  if (c.rc !== undefined) row.rc = c.rc || null;
+  if (c.nif !== undefined) row.nif = c.nif || null;
+  if (c.nis !== undefined) row.nis = c.nis || null;
+  if (c.article !== undefined) row.article = c.article || null;
+  return row;
+};
 
 /** Ancienne dette (ardoise d'avant le logiciel) d'un client ou d'un fournisseur. */
 const toPartyOldDebt = (r: any): PartyOldDebt => ({
@@ -250,6 +265,8 @@ const toCommandDelivery = (r: any): CommandDelivery => ({
   notes: r.notes ?? '',
   driverName: r.driver_name ?? undefined,
   driverPlate: r.driver_plate ?? undefined,
+  location: r.location ?? undefined,
+  isHistorical: r.is_historical ?? false,
   createdBy: r.created_by ?? undefined,
   items: (r.command_delivery_items ?? []).map((i: any) => ({
     commandItemId: i.command_item_id ?? undefined,
@@ -471,6 +488,7 @@ const toCommand = (r: any): Command => ({
   paidAmount: num(r.paid_amount),
   restAmount: num(r.rest_amount),
   status: r.status,
+  isHistorical: r.is_historical ?? false,
   notes: r.notes ?? undefined,
   createdBy: r.created_by ?? '',
   items: (r.command_items ?? []).map((i: any) => ({
@@ -606,9 +624,12 @@ export const db = {
   clients: {
     list: async (): Promise<Client[]> => (await select<any>('clients')).map(toClient),
     create: async (c: Omit<Client, 'id'>) =>
-      toClient(await insert('clients', { name: c.name, phone: c.phone, address: c.address, note: c.note })),
+      toClient(await insert('clients', {
+        name: c.name, phone: c.phone, address: c.address, note: c.note,
+        rc: c.rc || null, nif: c.nif || null, nis: c.nis || null, article: c.article || null,
+      })),
     update: async (id: string, c: Partial<Client>) =>
-      toClient(await update('clients', id, { name: c.name, phone: c.phone, address: c.address, note: c.note })),
+      toClient(await update('clients', id, fromClient(c))),
     remove: (id: string) => remove('clients', id),
     passager: async (): Promise<Client> => toClient(await call('get_or_create_passager', {})),
   },

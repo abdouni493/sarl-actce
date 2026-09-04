@@ -40,7 +40,17 @@ export interface InvoiceLine {
 export interface SaleInvoiceData {
   reference: string;
   date: string; // ISO
-  client: { name: string; phone?: string; address?: string };
+  client: {
+    name: string;
+    phone?: string;
+    address?: string;
+    rc?: string;
+    nif?: string;
+    nis?: string;
+    article?: string;
+  };
+  /** Mode de règlement affiché (ex : « Bancaire », « Espèces »). */
+  paymentMode?: string;
   lines: InvoiceLine[];
   /** Productions launched by this sale (point de vente). */
   productions?: InvoiceProductionDetail[];
@@ -357,14 +367,19 @@ export function printSaleInvoice(data: SaleInvoiceData, store: StoreSettings) {
       <div class="body">
         <div class="grid2">
           <div class="box">
-            <div class="lbl">Client</div>
+            <div class="lbl">Doit</div>
             <div class="nm">${esc(data.client.name)}</div>
+            ${data.client.address ? `<div class="ln">Adresse : ${esc(data.client.address)}</div>` : ''}
+            ${data.client.rc ? `<div class="ln">R.C N° : <b>${esc(data.client.rc)}</b></div>` : ''}
+            ${data.client.nif ? `<div class="ln">NIF : <b>${esc(data.client.nif)}</b></div>` : ''}
+            ${data.client.nis ? `<div class="ln">NIS : <b>${esc(data.client.nis)}</b></div>` : ''}
+            ${data.client.article ? `<div class="ln">N° Article : <b>${esc(data.client.article)}</b></div>` : ''}
             ${data.client.phone ? `<div class="ln">Tél : ${esc(data.client.phone)}</div>` : ''}
-            ${data.client.address ? `<div class="ln">${esc(data.client.address)}</div>` : ''}
           </div>
           <div class="box alt">
             <div class="lbl">Règlement</div>
             <div class="nm">${data.rest > 0 ? 'Vente à crédit' : 'Réglée intégralement'}</div>
+            ${data.paymentMode ? `<div class="ln">Mode de règlement : <b>${esc(data.paymentMode)}</b></div>` : ''}
             <div class="ln">Payé : ${formatCurrency(data.paid)} · Reste : ${formatCurrency(data.rest)}</div>
             <div class="ln">${data.lines.length} article(s) facturé(s)</div>
             ${data.tvaEnabled ? `<div class="flag">TVA ${esc(tvaRate)} % — facture TTC</div>` : '<div class="flag">Facture sans TVA</div>'}

@@ -1,6 +1,18 @@
 import type { StoreSettings, PaymentMethod } from '@/types';
 import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel } from './utils';
 import { printDocument } from './print';
+import { amountInWords } from './invoicePrint';
+
+/** Identifiants fiscaux d'un client — imprimés dans le bloc « DOIT ». */
+export interface ClientFiscal {
+  name: string;
+  phone?: string;
+  address?: string;
+  rc?: string;
+  nif?: string;
+  nis?: string;
+  article?: string;
+}
 
 /* ============================================================================
  *  Documents imprimables — reçus de règlement, bons de livraison,
@@ -48,6 +60,13 @@ const BASE_CSS = `
   .totals .grand { background: #000; color: #fff; font-weight: 900; font-size: 16px; }
   .totals .ok { background: #d8f2e2; font-weight: 900; }
   .totals .due { background: #fbdde3; font-weight: 900; }
+  .totals .tva { background: #f4f4f4; font-weight: 900; }
+
+  /* Totaux + montant en lettres côte à côte (façon facture SARL) */
+  .totwrap { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 18px; }
+  .words { flex: 1; border: 2px dashed #000; border-radius: 6px; padding: 12px 15px; font-size: 13.5px; color: #000; background: #fafafa; }
+  .words .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #000; font-weight: 900; margin-bottom: 4px; }
+  .words .v { font-weight: 900; font-style: italic; color: #000; }
 
   .note { border: 2px dashed #000; border-radius: 6px; padding: 11px 15px; font-size: 13.5px; font-weight: 700; color: #000; margin-bottom: 16px; background: #fafafa; }
   .signs { display: flex; justify-content: space-between; gap: 20px; margin-top: 30px; font-size: 13.5px; text-align: center; break-inside: avoid; }
@@ -99,6 +118,60 @@ function esc(v: unknown): string {
 
 function wrap(inner: string): string {
   return `<style>${BASE_CSS}</style><div class="sheet">${inner}</div>`;
+}
+
+/**
+ * Bloc « DOIT » — le client à qui le document est adressé, avec ses
+ * identifiants fiscaux (R.C, NIF, NIS, N° Article) tels qu'ils figurent sur
+ * les factures officielles algériennes.
+ */
+function doitBlock(client: ClientFiscal, label = 'DOIT'): string {
+  const fiscal = [
+    client.address ? `<span class="lbl">Adresse :</span> ${esc(client.address)}` : '',
+    client.rc ? `<span class="lbl">R.C N° :</span> <strong>${esc(client.rc)}</strong>` : '',
+    client.nif ? `<span class="lbl">NIF :</span> <strong>${esc(client.nif)}</strong>` : '',
+    client.nis ? `<span class="lbl">NIS :</span> <strong>${esc(client.nis)}</strong>` : '',
+    client.article ? `<span class="lbl">N° Article :</span> <strong>${esc(client.article)}</strong>` : '',
+    client.phone ? `<span class="lbl">Tél :</span> ${esc(client.phone)}` : '',
+  ].filter(Boolean).join('<br/>');
+
+  return `
+    <div class="party">
+      <div class="lbl">${esc(label)}</div>
+      <strong style="font-size:17px;">${esc(client.name)}</strong>
+      ${fiscal ? `<br/>${fiscal}` : ''}
+    </div>`;
+}
+
+/** Bloc de totaux HT / TVA / TTC + montant en lettres, façon facture SARL. */
+function totalsTTC(opts: {
+  ht: number; tvaRate?: number; tvaAmount?: number; ttc: number;
+  paid?: number; rest?: number; showPaid?: boolean;
+}): string {
+  const hasTva = !!opts.tvaAmount && opts.tvaAmount > 0;
+  return `
+    <div class="totwrap">
+      <div class="words">
+        <div class="lbl">Arrêtée la présente à la somme de</div>
+        <div class="v">${esc(amountInWords(opts.ttc))}</div>
+      </div>
+      <div class="totals" style="margin:0;">
+        <div><span>TOTAL H.T</span><strong>${formatCurrency(opts.ht)}</strong></div>
+        ${hasTva ? `<div class="tva"><span>TVA ${esc(opts.tvaRate ?? 19)} %</span><strong>${formatCurrency(opts.tvaAmount as number)}</strong></div>` : ''}
+        <div class="grand"><span>TOTAL T.T.C</span><strong>${formatCurrency(opts.ttc)}</strong></div>
+        ${opts.showPaid ? `<div class="ok"><span>Versé / Acompte</span><strong>${formatCurrency(opts.paid ?? 0)}</strong></div>` : ''}
+        ${opts.showPaid ? `<div class="${(opts.rest ?? 0) > 0 ? 'due' : 'grand'}"><span>Reste à payer</span><strong>${formatCurrency(opts.rest ?? 0)}</strong></div>` : ''}
+      </div>
+    </div>`;
+}
+
+/** Cartouche de signatures — « Le client » / « Cachet et signature de l'entreprise ». */
+function signBlock(): string {
+  return `
+    <div class="signs">
+      <div class="sign">Le client</div>
+      <div class="sign">Cachet &amp; signature de l'entreprise</div>
+    </div>`;
 }
 
 /* -------------------------------------------------------- reçu de règlement */
@@ -211,11 +284,20 @@ export interface DeliveryNoteData {
   clientPhone?: string;
   /** Adresse de livraison saisie sur la commande. */
   clientAddress?: string;
+  /** Identifiants fiscaux du client (bloc DOIT). */
+  clientRc?: string;
+  clientNif?: string;
+  clientNis?: string;
+  clientArticle?: string;
+  /** Lieu réellement livré pour ce bon. */
+  location?: string;
   deliveredAt: string;
   notes?: string;
   /** Chauffeur qui effectue la livraison + immatriculation (facultative). */
   driverName?: string;
   driverPlate?: string;
+  /** Ancienne livraison (commande ancienne). */
+  historical?: boolean;
   lines: DeliveryNoteLine[];
   /** Situation financière de la commande d'origine. */
   totalAmount: number;
@@ -263,27 +345,25 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
     .join('');
 
   const html = wrap(`
-    ${header(store, 'BON DE LIVRAISON', [
+    ${header(store, data.historical ? 'ANCIENNE LIVRAISON' : 'BON DE LIVRAISON', [
       `<strong>N° ${esc(data.reference)}</strong>`,
       `Commande : ${esc(data.commandReference)}`,
       data.bonNumber ? `<strong>N° Bon : ${esc(data.bonNumber)}</strong>` : '',
       `Livré le : ${esc(formatDateTime(data.deliveredAt))}`,
     ].filter(Boolean))}
     <div class="content">
-      <div class="party">
-        <div class="lbl">Client</div>
-        <strong style="font-size:18px;">${esc(data.clientName)}</strong>
-        ${data.clientPhone ? `<br/><span class="lbl">Téléphone :</span> ${esc(data.clientPhone)}` : ''}
-        <br/><span class="lbl">Adresse de livraison :</span> <strong>${esc(data.clientAddress || '—')}</strong>
-      </div>
+      ${doitBlock({
+        name: data.clientName, phone: data.clientPhone, address: data.clientAddress,
+        rc: data.clientRc, nif: data.clientNif, nis: data.clientNis, article: data.clientArticle,
+      })}
 
-      ${data.driverName || data.driverPlate
-        ? `<div class="party" style="background:#fff;">
-             <div class="lbl">Transport</div>
-             ${data.driverName ? `<span class="lbl">Chauffeur :</span> <strong style="font-size:16px;">${esc(data.driverName)}</strong>` : ''}
-             ${data.driverPlate ? `${data.driverName ? '&nbsp;&nbsp;·&nbsp;&nbsp;' : ''}<span class="lbl">Matricule :</span> <strong style="font-size:16px;">${esc(data.driverPlate)}</strong>` : ''}
-           </div>`
-        : ''}
+      <div class="party" style="background:#fff;">
+        <div class="lbl">Lieu de livraison (localisation)</div>
+        <strong style="font-size:16px;">${esc(data.location || data.clientAddress || '—')}</strong>
+        ${data.driverName || data.driverPlate
+          ? `<br/>${data.driverName ? `<span class="lbl">Chauffeur :</span> <strong>${esc(data.driverName)}</strong>` : ''}${data.driverPlate ? `${data.driverName ? '&nbsp;&nbsp;·&nbsp;&nbsp;' : ''}<span class="lbl">Matricule :</span> <strong>${esc(data.driverPlate)}</strong>` : ''}`
+          : ''}
+      </div>
 
       <table>
         <thead>
@@ -314,19 +394,27 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
 
       ${data.notes ? `<div class="note"><strong>Observations :</strong> ${esc(data.notes)}</div>` : ''}
 
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:20px;">
+      <div style="margin-bottom:14px;">
         <span class="stamp ${isFull ? '' : 'warn'}">
           ${isFull ? 'COMMANDE ENTIÈREMENT LIVRÉE'
             : isPartial ? `LIVRAISON PARTIELLE — ${percent.toFixed(0)}%`
             : 'NON LIVRÉE'}
         </span>
+        ${data.historical ? '<span class="stamp warn" style="margin-left:10px;">ANCIENNE LIVRAISON</span>' : ''}
+      </div>
+
+      <div class="totwrap">
+        <div class="words">
+          <div class="lbl">Valeur de la marchandise livrée</div>
+          <div class="v">${esc(amountInWords(amountNow))}</div>
+        </div>
         <div class="totals" style="margin:0;">
           <div class="grand"><span>Valeur livrée ce jour</span><strong>${formatCurrency(amountNow)}</strong></div>
           <div><span>Valeur livrée au total</span><strong>${formatCurrency(amountAll)}</strong></div>
           <div><span>Total Commande</span><strong>${formatCurrency(data.totalAmount)}</strong></div>
-          <div class="ok"><span>Acompte Versé</span><strong>${formatCurrency(data.paidAmount)}</strong></div>
+          <div class="ok"><span>Acompte versé</span><strong>${formatCurrency(data.paidAmount)}</strong></div>
           <div class="${data.restAmount > 0 ? 'due' : 'grand'}">
-            <span>Reste à Payer</span><strong>${formatCurrency(data.restAmount)}</strong>
+            <span>Reste à payer</span><strong>${formatCurrency(data.restAmount)}</strong>
           </div>
         </div>
       </div>
@@ -336,14 +424,94 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
         indiquées et en bon état.
       </div>
 
-      <div class="signs">
-        <div class="sign">Signature &amp; bon pour réception (Client)</div>
-        <div class="sign">Cachet &amp; Signature Entreprise</div>
-      </div>
+      ${signBlock()}
       <div class="foot">${esc(store.socialMedia || '')} — Merci de votre confiance.</div>
     </div>`);
 
   printDocument(html, `Bon_de_Livraison_${data.reference}`);
+}
+
+/* ----------------------------------- rapport de livraisons sur une période */
+
+export interface DeliveryPeriodLine {
+  date: string;        // YYYY-MM-DD
+  location?: string;
+  designation: string;
+  quantity: number;
+  unit?: string;
+  unitPrice: number;
+  amount: number;
+}
+
+export interface DeliveryPeriodReportData {
+  client: ClientFiscal;
+  from: string;
+  to: string;
+  lines: DeliveryPeriodLine[];
+  /** Applique la TVA au pied du tableau (HT / TVA / TTC). */
+  applyTva?: boolean;
+  tvaRate?: number;    // défaut 19
+}
+
+/**
+ * Rapport de livraisons d'un client sur une période — modèle « Livraison du …
+ * au … », lignes groupées par DATE puis LOCALISATION, avec TOTAL H.T, TVA et
+ * TOTAL T.T.C. C'est le document manuscrit reproduit à l'identique.
+ */
+export function printDeliveryPeriodReport(data: DeliveryPeriodReportData, store: StoreSettings) {
+  const ht = data.lines.reduce((s, l) => s + l.amount, 0);
+  const rate = data.tvaRate ?? 19;
+  const tva = data.applyTva ? Math.round(ht * rate) / 100 : 0;
+  const ttc = ht + tva;
+
+  let prevDate = '';
+  let prevLoc = '';
+  const rows = data.lines
+    .map((l) => {
+      const u = l.unit ? ` ${esc(l.unit)}` : '';
+      const showDate = l.date !== prevDate;
+      const showLoc = showDate || (l.location || '') !== prevLoc;
+      prevDate = l.date;
+      prevLoc = l.location || '';
+      return `<tr>
+        <td class="center">${showDate ? esc(formatDate(l.date)) : ''}</td>
+        <td>${showLoc ? esc(l.location || '—') : ''}</td>
+        <td><strong>${esc(l.designation)}</strong></td>
+        <td class="center">${l.quantity}${u}</td>
+        <td class="right">${formatCurrency(l.unitPrice)}</td>
+        <td class="right"><strong>${formatCurrency(l.amount)}</strong></td>
+      </tr>`;
+    })
+    .join('');
+
+  const html = wrap(`
+    ${header(store, 'BON DE LIVRAISON', [
+      `<strong>Livraison du ${esc(formatDate(data.from))} au ${esc(formatDate(data.to))}</strong>`,
+    ])}
+    <div class="content">
+      ${doitBlock(data.client)}
+
+      <table>
+        <thead>
+          <tr>
+            <th class="center">Date</th>
+            <th>Localisation</th>
+            <th>Désignation</th>
+            <th class="center">Quantité</th>
+            <th class="right">P.U</th>
+            <th class="right">Montant</th>
+          </tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="6" class="center">Aucune livraison sur la période</td></tr>'}</tbody>
+      </table>
+
+      ${totalsTTC({ ht, tvaRate: rate, tvaAmount: tva, ttc })}
+
+      ${signBlock()}
+      <div class="foot">${esc(store.socialMedia || '')} — Merci de votre confiance.</div>
+    </div>`);
+
+  printDocument(html, `Livraisons_${data.client.name.replace(/\s+/g, '_')}`);
 }
 
 /* --------------------------------------------- bon de commande CLIENT */
@@ -369,9 +537,16 @@ export interface CommandOrderData {
   clientName: string;
   clientPhone?: string;
   clientAddress?: string;
+  /** Identifiants fiscaux du client (bloc DOIT). */
+  clientRc?: string;
+  clientNif?: string;
+  clientNis?: string;
+  clientArticle?: string;
   driverName?: string;
   driverPlate?: string;
   notes?: string;
+  /** Ancienne commande saisie a posteriori. */
+  historical?: boolean;
   lines: CommandOrderLine[];
   totalAmount: number;
   paidAmount: number;
@@ -411,19 +586,17 @@ export function printCommandOrder(data: CommandOrderData, store: StoreSettings) 
     .join('');
 
   const html = wrap(`
-    ${header(store, 'BON DE COMMANDE', [
+    ${header(store, data.historical ? 'ANCIENNE COMMANDE' : 'BON DE COMMANDE', [
       `<strong>Réf : ${esc(data.reference)}</strong>`,
       data.bonNumber ? `<strong>N° Bon : ${esc(data.bonNumber)}</strong>` : '',
       `Créée le : ${esc(formatDate(data.createdAt.slice(0, 10)))}`,
       `Livraison prévue : ${esc(formatDate(data.receiveDate))} à ${esc(data.receiveHour)}h${esc(data.receiveMinute)}`,
     ].filter(Boolean))}
     <div class="content">
-      <div class="party">
-        <div class="lbl">Client</div>
-        <strong style="font-size:18px;">${esc(data.clientName)}</strong>
-        ${data.clientPhone ? `<br/><span class="lbl">Téléphone :</span> ${esc(data.clientPhone)}` : ''}
-        <br/><span class="lbl">Adresse de livraison :</span> <strong>${esc(data.clientAddress || '—')}</strong>
-      </div>
+      ${doitBlock({
+        name: data.clientName, phone: data.clientPhone, address: data.clientAddress,
+        rc: data.clientRc, nif: data.clientNif, nis: data.clientNis, article: data.clientArticle,
+      })}
 
       ${data.driverName || data.driverPlate
         ? `<div class="party" style="background:#fff;">
@@ -436,13 +609,13 @@ export function printCommandOrder(data: CommandOrderData, store: StoreSettings) 
       <table>
         <thead>
           <tr>
-            <th class="center" style="width:38px;">#</th>
+            <th class="center" style="width:38px;">N°</th>
             <th>Désignation</th>
             <th class="center">Qté commandée</th>
             <th class="center">Qté livrée</th>
             <th class="center">Reste à livrer</th>
             <th class="right">P.U.</th>
-            <th class="right">Total</th>
+            <th class="right">Montant</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -460,25 +633,21 @@ export function printCommandOrder(data: CommandOrderData, store: StoreSettings) 
 
       ${data.notes ? `<div class="note"><strong>Observations :</strong> ${esc(data.notes)}</div>` : ''}
 
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:20px;">
+      <div style="margin-bottom:14px;">
         <span class="stamp ${isFull ? '' : 'warn'}">
           ${isFull ? 'COMMANDE ENTIÈREMENT LIVRÉE'
             : isPartial ? `LIVRAISON PARTIELLE — ${percent.toFixed(0)}%`
             : 'NON LIVRÉE'}
         </span>
-        <div class="totals" style="margin:0;">
-          <div><span>Total Commande</span><strong>${formatCurrency(data.totalAmount)}</strong></div>
-          <div class="ok"><span>Acompte Versé</span><strong>${formatCurrency(data.paidAmount)}</strong></div>
-          <div class="${data.restAmount > 0 ? 'due' : 'grand'}">
-            <span>Reste à Payer</span><strong>${formatCurrency(data.restAmount)}</strong>
-          </div>
-        </div>
+        ${data.historical ? '<span class="stamp warn" style="margin-left:10px;">ANCIENNE COMMANDE</span>' : ''}
       </div>
 
-      <div class="signs">
-        <div class="sign">Signature Client</div>
-        <div class="sign">Cachet &amp; Signature Entreprise</div>
-      </div>
+      ${totalsTTC({
+        ht: data.totalAmount, ttc: data.totalAmount,
+        paid: data.paidAmount, rest: data.restAmount, showPaid: true,
+      })}
+
+      ${signBlock()}
       <div class="foot">${esc(store.socialMedia || '')} — Merci de votre confiance.</div>
     </div>`);
 

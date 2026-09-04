@@ -115,6 +115,14 @@ export interface Client {
   phone: string;
   address?: string;
   note?: string;
+  /** Registre du commerce — imprimé dans le bloc « DOIT » des factures. */
+  rc?: string;
+  /** N° d'identification fiscale (NIF). */
+  nif?: string;
+  /** N° d'identification statistique (NIS). */
+  nis?: string;
+  /** N° d'article d'imposition. */
+  article?: string;
   /**
    * Avance du client : ce qu'il a versé EN PLUS de sa dette. Tant qu'elle n'est
    * pas imputée sur une nouvelle vente ni rendue, sa carte affiche un solde
@@ -576,6 +584,10 @@ export interface CommandDelivery {
   driverName?: string;
   /** Immatriculation du camion — facultative. */
   driverPlate?: string;
+  /** Lieu réellement livré pour ce bon (défaut : adresse de la commande). */
+  location?: string;
+  /** Ancienne livraison (commande ancienne) : aucune matière retirée du stock. */
+  isHistorical?: boolean;
   items: CommandDeliveryItem[];
   /** Matières premières déduites du stock par cette livraison. */
   consumptions?: CommandDeliveryConsumption[];

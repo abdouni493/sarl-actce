@@ -45,6 +45,13 @@ export interface Command {
   paidAmount: number;
   restAmount: number;
   status: 'pending' | 'finalised' | 'cancelled';
+  /**
+   * « Ancienne commande » : commande antérieure saisie a posteriori pour
+   * reconstituer l'historique d'un client. Rien n'est déduit du stock, aucune
+   * production n'est lancée et aucune écriture de caisse n'est générée — seule
+   * la statistique commerciale (client, dette, rapports) est alimentée.
+   */
+  isHistorical?: boolean;
   notes?: string;
   createdBy: string;
 }
@@ -103,10 +110,12 @@ interface CommandState {
   deleteDelivery: (id: string) => Promise<void>;
 }
 
-/** Chauffeur d'une livraison — repris de la commande ou saisi à la volée. */
+/** Chauffeur et lieu d'une livraison — repris de la commande ou saisis à la volée. */
 export interface DeliveryDriver {
   driverName?: string;
   driverPlate?: string;
+  /** Lieu réellement livré pour ce bon (défaut : adresse de la commande). */
+  location?: string;
 }
 
 const itemPayload = (i: CommandItem) => ({
@@ -159,6 +168,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         advance_paid: advance,
         notes: data.notes ?? null,
         bon_number: data.bonNumber ?? null,
+        is_historical: data.isHistorical ?? false,
         created_at: data.createdAt ?? null,
         items: data.items.map(itemPayload),
       })
@@ -233,6 +243,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         notes,
         driver_name: driver?.driverName ?? null,
         driver_plate: driver?.driverPlate ?? null,
+        location: driver?.location ?? null,
         items: items.map(deliveryItemPayload),
       })
     );
@@ -252,6 +263,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         notes,
         driver_name: driver?.driverName ?? null,
         driver_plate: driver?.driverPlate ?? null,
+        location: driver?.location ?? null,
         items: items.map(deliveryItemPayload),
       })
     );

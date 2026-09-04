@@ -30,7 +30,7 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency, formatDate, formatDateTime, todayISO } from '@/lib/utils';
 import { printCommandOrder, printDeliveryNote } from '@/lib/documents';
 import { cardVariants } from '@/lib/animations';
-import type { CommandDelivery } from '@/types';
+import type { Client, CommandDelivery } from '@/types';
 
 type DateFilter = 'today' | 'week' | 'month' | 'period' | 'all';
 type StatusFilter = 'all' | 'paid' | 'debt' | 'undelivered' | 'partial' | 'delivered';
@@ -52,6 +52,8 @@ export default function CommandsPage() {
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState<DateFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  /** Sépare les commandes réelles des « anciennes commandes » (statistiques). */
+  const [scope, setScope] = useState<'real' | 'historical'>('real');
   const [from, setFrom] = useState(todayISO());
   const [to, setTo] = useState(todayISO());
 
@@ -81,6 +83,8 @@ export default function CommandsPage() {
   const [bonNumber, setBonNumber] = useState('');
   const [createdDate, setCreatedDate] = useState(todayISO());
   const [originalCreatedDate, setOriginalCreatedDate] = useState(todayISO());
+  /** La commande en cours de saisie est-elle une « ancienne commande » ? */
+  const [formHistorical, setFormHistorical] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Interaction modals
@@ -102,6 +106,8 @@ export default function CommandsPage() {
   /* --------------------------------------------------------------- filters */
   const filteredCommands = useMemo(() => {
     return commands.filter((c) => {
+      // les anciennes commandes vivent dans leur propre onglet
+      if (scope === 'historical' ? !c.isHistorical : !!c.isHistorical) return false;
       const q = search.toLowerCase();
       const matchesSearch =
         c.clientName.toLowerCase().includes(q) ||
@@ -137,7 +143,7 @@ export default function CommandsPage() {
 
       return matchesSearch && matchesStatus && matchesDate;
     });
-  }, [commands, search, statusFilter, dateFilter, from, to]);
+  }, [commands, scope, search, statusFilter, dateFilter, from, to]);
 
   const stats = useMemo(() => {
     const totalPaid = filteredCommands.reduce((s, c) => s + c.paidAmount, 0);
@@ -218,11 +224,12 @@ export default function CommandsPage() {
   const computedTotalSum = selectedItems.reduce((sum, item) => sum + item.totalPrice, 0);
   const finalTotalAmount = customTotal !== null ? customTotal : computedTotalSum;
 
-  const handleOpenCreateForm = () => {
+  const handleOpenCreateForm = (historical = false) => {
     setEditingId(null); setSelectedClient(null); setSelectedItems([]);
     setReceiveDate(todayISO()); setReceiveHour('14'); setReceiveMinute('30');
     setCustomTotal(null); setVersement(0); setClientSearch(''); setRecipeSearch('');
     setBonNumber(''); setCreatedDate(todayISO()); setOriginalCreatedDate(todayISO());
+    setFormHistorical(historical);
     // l'adresse et le chauffeur sont redemandés à chaque nouvelle commande
     setClientAddress(''); setAddressError(false);
     setDriverName(''); setDriverPlate('');
@@ -232,6 +239,7 @@ export default function CommandsPage() {
 
   const handleOpenEditForm = (cmd: Command) => {
     setEditingId(cmd.id);
+    setFormHistorical(!!cmd.isHistorical);
     const known = clients.find((c) => c.id === cmd.clientId);
     setSelectedClient({
       id: cmd.clientId, name: cmd.clientName, phone: cmd.clientPhone,
@@ -288,6 +296,7 @@ export default function CommandsPage() {
         advancePaid: versement,
         paidAmount: versement,
         bonNumber: bonNumber.trim() || undefined,
+        isHistorical: formHistorical,
         createdAt: createdAtOverride,
       };
 
@@ -330,6 +339,14 @@ export default function CommandsPage() {
     if (delivery) setPrintPrompt({ kind: 'delivery', cmd: refreshed, delivery });
   };
 
+  /** Identifiants fiscaux du client rattaché à une commande (bloc « DOIT »). */
+  const clientFiscalOf = (cmd: Command) => {
+    const cli = clients.find((c) => c.id === cmd.clientId);
+    return {
+      clientRc: cli?.rc, clientNif: cli?.nif, clientNis: cli?.nis, clientArticle: cli?.article,
+    };
+  };
+
   const doPrintDelivery = (cmd: Command, delivery: CommandDelivery) => {
     printDeliveryNote(
       {
@@ -339,6 +356,9 @@ export default function CommandsPage() {
         clientName: cmd.clientName,
         clientPhone: cmd.clientPhone,
         clientAddress: cmd.clientAddress,
+        ...clientFiscalOf(cmd),
+        location: delivery.location || cmd.clientAddress,
+        historical: delivery.isHistorical ?? cmd.isHistorical,
         deliveredAt: delivery.deliveredAt,
         notes: delivery.notes,
         driverName: delivery.driverName || cmd.driverName,
@@ -389,6 +409,8 @@ export default function CommandsPage() {
         clientName: cmd.clientName,
         clientPhone: cmd.clientPhone,
         clientAddress: cmd.clientAddress,
+        ...clientFiscalOf(cmd),
+        historical: cmd.isHistorical,
         driverName: cmd.driverName,
         driverPlate: cmd.driverPlate,
         notes: cmd.notes,
@@ -412,20 +434,45 @@ export default function CommandsPage() {
       <PageHeader
         title="Commandes clients"
         icon={<ShoppingCart size={24} />}
-        subtitle={`${filteredCommands.length} commande(s) · ${stats.pendingDelivery} en attente de livraison`}
+        subtitle={`${filteredCommands.length} ${scope === 'historical' ? 'ancienne(s) commande(s)' : 'commande(s)'} · ${stats.pendingDelivery} en attente de livraison`}
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => navigate('/clients')}>
               <User size={18} /> Clients
             </Button>
             {can('clients', 'create') && (
-              <Button variant="gold" onClick={handleOpenCreateForm}>
-                <Plus size={18} /> Nouvelle commande
-              </Button>
+              <>
+                <Button variant="gold" onClick={() => handleOpenCreateForm(false)}>
+                  <Plus size={18} /> Nouvelle commande
+                </Button>
+                <Button variant="rose" onClick={() => handleOpenCreateForm(true)}>
+                  <History size={18} /> Ancienne commande
+                </Button>
+              </>
             )}
           </div>
         }
       />
+
+      {/* Onglets : commandes réelles / anciennes commandes (séparées) */}
+      <div className="inline-flex rounded-2xl border border-gold/20 bg-vanilla/40 p-1">
+        <button
+          onClick={() => setScope('real')}
+          className={`flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition-all ${
+            scope === 'real' ? 'bg-gradient-button text-white shadow-card' : 'text-text-muted hover:text-text-primary'
+          }`}
+        >
+          <ShoppingCart size={15} /> Commandes réelles
+        </button>
+        <button
+          onClick={() => setScope('historical')}
+          className={`flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition-all ${
+            scope === 'historical' ? 'bg-rose-deep text-white shadow-card' : 'text-text-muted hover:text-text-primary'
+          }`}
+        >
+          <History size={15} /> Anciennes commandes
+        </button>
+      </div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -532,6 +579,11 @@ export default function CommandsPage() {
                   <div className="flex justify-between items-start mb-3 gap-2">
                     <div className="min-w-0">
                       <span className="text-xs font-bold text-gold">{cmd.reference}</span>
+                      {cmd.isHistorical && (
+                        <span className="text-[9px] font-bold uppercase tracking-wide text-rose-deep bg-rose-deep/10 border border-rose-deep/30 rounded px-1.5 py-0.5 ml-1.5">
+                          Ancienne
+                        </span>
+                      )}
                       {cmd.bonNumber && <span className="text-[10px] font-semibold text-text-muted ml-1.5">· Bon N° {cmd.bonNumber}</span>}
                       <h3 className="font-display font-semibold text-text-primary text-base truncate">{cmd.clientName}</h3>
                       {cmd.clientPhone && (
@@ -681,10 +733,27 @@ export default function CommandsPage() {
       <Modal
         open={formOpen}
         onClose={() => setFormOpen(false)}
-        title={editingId ? 'Modifier la commande' : 'Nouvelle commande'}
+        title={
+          editingId
+            ? (formHistorical ? 'Modifier l’ancienne commande' : 'Modifier la commande')
+            : (formHistorical ? 'Nouvelle ancienne commande' : 'Nouvelle commande')
+        }
         size="lg"
       >
         <div className="space-y-4">
+          {formHistorical && (
+            <div className="flex items-start gap-3 rounded-2xl border border-rose-deep/40 bg-rose-deep/10 px-4 py-3">
+              <History size={18} className="shrink-0 mt-0.5 text-rose-deep" />
+              <div>
+                <p className="text-sm font-bold text-rose-deep">Ancienne commande — statistiques uniquement</p>
+                <p className="text-xs text-text-secondary mt-0.5">
+                  Choisissez la <b>date d'origine</b> ci-dessous. Cette commande alimente l'historique
+                  du client et les rapports, mais <b>ne touche ni la caisse, ni le stock, ni la
+                  production</b>. Ses livraisons seront elles aussi « anciennes » (sans déduction de stock).
+                </p>
+              </div>
+            </div>
+          )}
           {/* Client */}
           <div className="border border-gold/20 rounded-2xl p-4 bg-vanilla/40 relative">
             <h3 className="text-xs font-bold text-gold uppercase tracking-wider mb-3 flex items-center gap-2">

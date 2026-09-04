@@ -56,7 +56,10 @@ export default function SalesPage() {
     printSaleInvoice({
       reference: s.reference,
       date: s.date,
-      client: { name: cl?.name || t('walkIn'), phone: cl?.phone, address: cl?.address },
+      client: {
+        name: cl?.name || t('walkIn'), phone: cl?.phone, address: cl?.address,
+        rc: cl?.rc, nif: cl?.nif, nis: cl?.nis, article: cl?.article,
+      },
       lines: s.products.map((l) => ({
         designation: l.productName || '', quantity: l.quantity, unit: l.unit,
         unitPrice: l.sellingPrice, basePrice: l.basePrice,

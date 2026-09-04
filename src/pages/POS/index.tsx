@@ -602,6 +602,10 @@ export default function POS() {
           name: client?.name || t('walkIn'),
           phone: client?.phone,
           address: client?.address,
+          rc: client?.rc,
+          nif: client?.nif,
+          nis: client?.nis,
+          article: client?.article,
         },
         lines: sale.products.map((l) => ({
           designation: l.productName || '',

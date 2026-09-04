@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Truck, PackageCheck, AlertTriangle, CalendarClock, User, Hash, MapPin, Package,
+  Truck, PackageCheck, AlertTriangle, CalendarClock, User, Hash, MapPin, Package, History,
 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -58,6 +58,9 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
   const [sameDriver, setSameDriver] = useState(true);
   const [driverName, setDriverName] = useState('');
   const [driverPlate, setDriverPlate] = useState('');
+  /** Lieu réellement livré — par défaut l'adresse de la commande. */
+  const [location, setLocation] = useState('');
+  const isHistorical = !!command?.isHistorical;
 
   useEffect(() => {
     if (!open || !command) return;
@@ -89,6 +92,7 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
     setSameDriver(
       !!(cmdName || cmdPlate) && curName === cmdName && curPlate === cmdPlate
     );
+    setLocation(editing?.location ?? command.clientAddress ?? '');
   }, [open, command, editing]);
 
   /** Coche « même chauffeur » → on recopie celui de la commande. */
@@ -168,6 +172,7 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
       await onSave(items, new Date(deliveredAt).toISOString(), notes, {
         driverName: driverName.trim() || undefined,
         driverPlate: driverPlate.trim() || undefined,
+        location: location.trim() || undefined,
       });
       onClose();
     } finally {
@@ -199,23 +204,36 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
             </div>
           </div>
 
-          {command.clientAddress && (
-            <div className="flex items-start gap-2 rounded-xl border border-gold/20 bg-vanilla/40 px-3.5 py-2.5 text-xs">
-              <MapPin size={14} className="text-gold shrink-0 mt-0.5" />
-              <span className="text-text-secondary">
-                <span className="font-bold uppercase tracking-wide text-text-muted">Adresse de livraison : </span>
-                <span className="font-semibold text-text-primary">{command.clientAddress}</span>
-              </span>
+          {isHistorical && (
+            <div className="flex items-start gap-3 rounded-2xl border border-rose-deep/40 bg-rose-deep/10 px-4 py-3">
+              <History size={18} className="shrink-0 mt-0.5 text-rose-deep" />
+              <div>
+                <p className="text-sm font-bold text-rose-deep">Ancienne livraison</p>
+                <p className="text-xs text-text-secondary mt-0.5">
+                  Cette commande est une <b>ancienne commande</b> : la livraison est enregistrée pour
+                  l'historique et les statistiques uniquement. <b>Aucune matière ne sera retirée du
+                  stock</b> et aucune production ne sera lancée.
+                </p>
+              </div>
             </div>
           )}
 
-          <Input
-            label="Date et heure de la livraison"
-            type="datetime-local"
-            value={deliveredAt}
-            onChange={(e) => setDeliveredAt(e.target.value)}
-            icon={<CalendarClock size={15} />}
-          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input
+              label="Date et heure de la livraison"
+              type="datetime-local"
+              value={deliveredAt}
+              onChange={(e) => setDeliveredAt(e.target.value)}
+              icon={<CalendarClock size={15} />}
+            />
+            <Input
+              label="Lieu de livraison (localisation)"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="Ex : Beni Mered, Blida…"
+              icon={<MapPin size={15} />}
+            />
+          </div>
 
           {/* ---- Chauffeur de cette livraison ---- */}
           <div className="rounded-2xl border border-gold/20 bg-vanilla/40 p-4 space-y-3">
@@ -332,6 +350,7 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
           </div>
 
           {/* ---- Matières premières déduites du stock par cette livraison ---- */}
+          {!isHistorical && (
           <div className="rounded-2xl border border-gold/20 bg-vanilla/30 overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gold/15 bg-gold/8 px-4 py-2.5">
               <p className="text-xs font-bold uppercase tracking-wider text-gold-dark flex items-center gap-2">
@@ -410,6 +429,7 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
               </p>
             )}
           </div>
+          )}
 
           {/* Valeur de la livraison — reprise telle quelle sur le bon imprimé */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

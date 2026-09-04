@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   FileBarChart, Printer, ShoppingBag, Coins, ClipboardList, Wallet, RotateCcw, Package, Percent,
-  History, Undo2, PiggyBank,
+  History, Undo2, PiggyBank, Truck,
 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -16,6 +16,7 @@ import { useLanguage } from '@/hooks/useLanguage';
 import { formatCurrency, formatDate, formatDateTime, todayISO, paymentMethodLabel } from '@/lib/utils';
 import { computePartyBalance } from '@/lib/partyBalance';
 import { printDetailedReport, type PrintRow, type PrintTableSection } from '@/lib/reportPrint';
+import { printDeliveryPeriodReport, type DeliveryPeriodLine } from '@/lib/documents';
 import type { Client } from '@/types';
 
 /**
@@ -31,6 +32,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
   const oldDebts = useClientStore((s) => s.oldDebts);
   const refunds = useClientStore((s) => s.refunds);
   const commands = useCommandStore((s) => s.commands);
+  const deliveries = useCommandStore((s) => s.deliveries);
   const debts = useClientDebtStore((s) => s.debts);
   const settings = useSettingsStore((s) => s.settings);
 
@@ -91,6 +93,34 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
           .map((v) => ({ ...v, debtDescription: d.description }))
       )
       .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+    // LIVRAISONS de la période — chaque bon de livraison d'une commande du
+    // client dont la date de remise tombe dans la période, éclaté ligne à ligne
+    // (date · localisation · désignation · quantité · P.U · montant).
+    const clientCommandIds = new Set(commands.filter((c) => c.clientId === client.id).map((c) => c.id));
+    const commandById = new Map(commands.map((c) => [c.id, c]));
+    const deliveriesList = deliveries
+      .filter((d) => clientCommandIds.has(d.commandId) && inPeriod(d.deliveredAt, f, t))
+      .sort((a, b) => a.deliveredAt.localeCompare(b.deliveredAt));
+    const deliveryLines: DeliveryPeriodLine[] = deliveriesList.flatMap((d) => {
+      const cmd = commandById.get(d.commandId);
+      return d.items.map((it) => {
+        const ci = cmd?.items.find(
+          (x) => (it.commandItemId && x.id === it.commandItemId) || x.productName === it.productName
+        );
+        const unitPrice = ci?.unitPrice ?? 0;
+        return {
+          date: d.deliveredAt.slice(0, 10),
+          location: d.location || cmd?.clientAddress || '—',
+          designation: it.productName,
+          quantity: it.quantity,
+          unit: it.sellUnit,
+          unitPrice,
+          amount: it.quantity * unitPrice,
+        };
+      });
+    });
+    const deliveriesTotal = deliveryLines.reduce((s, l) => s + l.amount, 0);
 
     const salesTotal = salesList.reduce((s, x) => s + x.finalAmount, 0);
     const salesPaid = salesList.reduce((s, x) => s + x.paidAmount, 0);
@@ -168,6 +198,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
 
     return {
       salesList, commandsList, paymentsList, versements, purchased,
+      deliveriesList, deliveryLines, deliveriesTotal,
       oldDebtsList, refundsList,
       salesTotal, salesPaid, salesRest,
       tvaSales, salesHT, salesReduction, tvaCollected, tvaRates,
@@ -181,7 +212,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
       netCollected: salesPaid + commandsPaid + settled + versed - refunded,
       outstanding: salesRest + commandsRest + oldDebtsRest,
     };
-  }, [client, period, sales, commands, payments, debts, oldDebts, refunds, clientRows]);
+  }, [client, period, sales, commands, deliveries, payments, debts, oldDebts, refunds, clientRows]);
 
   const periodLabel = period
     ? `Du ${formatDate(period.from, language)} au ${formatDate(period.to, language)}`
@@ -378,6 +409,39 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         }),
       ]),
       emptyLabel: 'Aucun produit commandé sur la période',
+    };
+
+    // Livraisons de la période — date · localisation · désignation · qté · P.U · montant
+    const deliveriesSection: PrintTableSection = {
+      title: 'Livraisons de la période',
+      icon: '🚚',
+      note: 'Chaque bon de livraison éclaté ligne à ligne, groupé par date et localisation.',
+      headerTotal: formatCurrency(data.deliveriesTotal),
+      cols: [
+        { label: 'Date' }, { label: 'Localisation' }, { label: 'Désignation' },
+        { label: 'Quantité', align: 'right' }, { label: 'P.U', align: 'right' },
+        { label: 'Montant', align: 'right' },
+      ],
+      rows: [
+        ...data.deliveryLines.map<PrintRow>((l) => ({
+          cells: [
+            formatDate(l.date, language),
+            l.location || '—',
+            l.designation,
+            `${l.quantity}${l.unit ? ` ${l.unit}` : ''}`,
+            formatCurrency(l.unitPrice),
+            formatCurrency(l.amount),
+          ],
+          tone: 'accent',
+        })),
+        ...(data.deliveryLines.length
+          ? [{
+              cells: ['TOTAL LIVRAISONS', '', '', '', '', formatCurrency(data.deliveriesTotal)],
+              variant: 'total' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: 'Aucune livraison sur la période',
     };
 
     // Récapitulatif : combien de chaque production le client a pris
@@ -597,12 +661,31 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         sections: [
           accountSection,
           salesSection, tvaSection, tvaSummarySection, detailSection,
-          commandsSection, commandDetailSection,
+          commandsSection, commandDetailSection, deliveriesSection,
           purchasedSection, oldDebtsSection, paymentsSection, versementsSection, refundsSection,
         ],
       },
       settings,
       language
+    );
+  };
+
+  /** Rapport de livraisons « Livraison du … au … » (modèle manuscrit, image 1). */
+  const doPrintDeliveries = () => {
+    if (!client || !data || !period) return;
+    printDeliveryPeriodReport(
+      {
+        client: {
+          name: client.name, phone: client.phone, address: client.address,
+          rc: client.rc, nif: client.nif, nis: client.nis, article: client.article,
+        },
+        from: period.from,
+        to: period.to,
+        lines: data.deliveryLines,
+        applyTva: true,
+        tvaRate: 19,
+      },
+      settings
     );
   };
 
@@ -636,9 +719,12 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                   <p className="font-display text-base font-semibold text-text-primary">{client.name}</p>
                   <p className="text-xs text-text-muted">{periodLabel}</p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button size="sm" variant="secondary" onClick={() => setPeriod(null)}>
                     <RotateCcw size={14} /> Changer la période
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={doPrintDeliveries}>
+                    <Truck size={14} /> Bon de livraisons (période)
                   </Button>
                   <Button size="sm" variant="gold" onClick={doPrint}>
                     <Printer size={14} /> Imprimer le compte rendu
@@ -760,6 +846,22 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                     </span>,
                   ];
                 })}
+              />
+
+              <ReportSection
+                title="Livraisons de la période" icon={<Truck size={14} />}
+                total={formatCurrency(data.deliveriesTotal)}
+                note="Chaque bon de livraison éclaté par date, localisation et produit."
+                head={['Date', 'Localisation', 'Désignation', 'Quantité', 'P.U', 'Montant']}
+                empty="Aucune livraison sur cette période"
+                rows={data.deliveryLines.map((l) => [
+                  formatDate(l.date, language),
+                  <span key="loc" className="font-semibold">{l.location || '—'}</span>,
+                  l.designation,
+                  `${l.quantity}${l.unit ? ` ${l.unit}` : ''}`,
+                  formatCurrency(l.unitPrice),
+                  <span key="a" className="font-bold text-gold-dark">{formatCurrency(l.amount)}</span>,
+                ])}
               />
 
               <ReportSection
