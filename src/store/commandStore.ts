@@ -3,6 +3,7 @@ import type { CommandDelivery, CommandDeliveryItem } from '@/types';
 import { db, rpc } from '@/lib/db';
 import { save } from '@/lib/persist';
 import { useStockStore } from './stockStore';
+import { useSalesStore } from './salesStore';
 
 export interface CommandItem {
   /** database id of the line — needed to attribute a delivery to it */
@@ -40,8 +41,19 @@ export interface Command {
   /** Immatriculation du camion — facultative. */
   driverPlate?: string;
   items: CommandItem[];
+  /** Total HORS TAXES des lignes de la commande. */
   totalAmount: number;
+  /** TVA activee sur la commande — reprise par defaut sur chaque livraison. */
+  tvaEnabled?: boolean;
+  /** Taux applique en pourcentage (19 % par defaut). */
+  tvaRate?: number;
+  /** Montant de TVA = total HT x taux / 100. */
+  tvaAmount?: number;
+  /** Net a payer : total HT + TVA. C'est lui qui determine le reste du. */
+  totalTtc?: number;
   advancePaid: number;
+  /** Reglements encaisses depuis l'ecran « Commandes » (hors acompte). */
+  extraPaid?: number;
   paidAmount: number;
   restAmount: number;
   status: 'pending' | 'finalised' | 'cancelled';
@@ -59,6 +71,7 @@ export interface Command {
 export type AddCommandInput = Omit<
   Command,
   'id' | 'reference' | 'createdAt' | 'paidAmount' | 'restAmount' | 'status' | 'createdBy' | 'advancePaid'
+  | 'totalTtc' | 'tvaAmount' | 'extraPaid'
 > & {
   createdBy?: string;
   advancePaid?: number;
@@ -98,19 +111,31 @@ interface CommandState {
     items: CommandDeliveryItem[],
     deliveredAt: string,
     notes?: string,
-    driver?: DeliveryDriver
+    driver?: DeliveryDriver,
+    payment?: DeliveryPayment
   ) => Promise<CommandDelivery>;
   updateDelivery: (
     id: string,
     items: CommandDeliveryItem[],
     deliveredAt: string,
     notes?: string,
-    driver?: DeliveryDriver
+    driver?: DeliveryDriver,
+    payment?: DeliveryPayment
   ) => Promise<void>;
   deleteDelivery: (id: string) => Promise<void>;
 }
 
 /** Chauffeur et lieu d'une livraison — repris de la commande ou saisis à la volée. */
+export interface DeliveryPayment {
+  /** TVA appliquee a ce bon (par defaut celle de la commande). */
+  tvaEnabled?: boolean;
+  tvaRate?: number;
+  /** Argent reellement encaisse au moment de la remise (entre en caisse). */
+  cashPaid?: number;
+  /** Part de l'acompte de la commande imputee ici (n'entre pas en caisse). */
+  advanceApplied?: number;
+}
+
 export interface DeliveryDriver {
   driverName?: string;
   driverPlate?: string;
@@ -140,6 +165,19 @@ const deliveryItemPayload = (i: CommandDeliveryItem) => ({
 const reloadStock = () =>
   useStockStore.getState().load().catch(() => undefined);
 
+/** Option TVA envoyee a la base — omise quand l'appelant ne la precise pas. */
+const tvaPayload = (p?: DeliveryPayment) =>
+  p?.tvaEnabled === undefined
+    ? {}
+    : { tva_enabled: p.tvaEnabled, tva_rate: p.tvaEnabled ? (p.tvaRate ?? 19) : 0 };
+
+/**
+ * Une livraison EST une vente : la facture qu'elle genere doit apparaitre
+ * immediatement dans « Ventes », dans la caisse et sur la fiche du client.
+ */
+const reloadSales = () =>
+  useSalesStore.getState().load().catch(() => undefined);
+
 export const useCommandStore = create<CommandState>()((set, get) => ({
   commands: [],
   deliveries: [],
@@ -165,6 +203,8 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         receive_hour: data.receiveHour,
         receive_minute: data.receiveMinute,
         total_amount: data.totalAmount,
+        tva_enabled: data.tvaEnabled ?? false,
+        tva_rate: data.tvaEnabled ? (data.tvaRate ?? 19) : 0,
         advance_paid: advance,
         notes: data.notes ?? null,
         bon_number: data.bonNumber ?? null,
@@ -189,6 +229,9 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         receive_hour: data.receiveHour,
         receive_minute: data.receiveMinute,
         total_amount: data.totalAmount,
+        ...(data.tvaEnabled !== undefined
+          ? { tva_enabled: data.tvaEnabled, tva_rate: data.tvaEnabled ? (data.tvaRate ?? 19) : 0 }
+          : {}),
         notes: data.notes ?? null,
         // champs facultatifs : ne jamais les effacer sur une mise à jour partielle
         ...(data.clientAddress !== undefined ? { client_address: data.clientAddress || null } : {}),
@@ -232,10 +275,10 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
       deliveries: get().deliveries.filter((d) => d.commandId !== id),
     });
     // ses livraisons partent en cascade : leurs matières reviennent au stock
-    if (hadDeliveries) await reloadStock();
+    if (hadDeliveries) await Promise.all([reloadStock(), reloadSales()]);
   },
 
-  addDelivery: async (commandId, items, deliveredAt, notes = '', driver) => {
+  addDelivery: async (commandId, items, deliveredAt, notes = '', driver, payment) => {
     const row = await save('commands.deliver', () =>
       rpc.createCommandDelivery({
         command_id: commandId,
@@ -244,19 +287,22 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         driver_name: driver?.driverName ?? null,
         driver_plate: driver?.driverPlate ?? null,
         location: driver?.location ?? null,
+        ...tvaPayload(payment),
+        cash_paid: payment?.cashPaid ?? 0,
+        advance_applied: payment?.advanceApplied ?? 0,
         items: items.map(deliveryItemPayload),
       })
     );
     // La livraison a retiré les matières premières du stock : « Gestion de
     // stock » doit repartir des quantités réelles de la base.
     const [commands, deliveries] = await Promise.all([
-      db.commands.list(), db.commandDeliveries.list(), reloadStock(),
+      db.commands.list(), db.commandDeliveries.list(), reloadStock(), reloadSales(),
     ]);
     set({ commands, deliveries });
     return deliveries.find((d) => d.id === row.id) as CommandDelivery;
   },
 
-  updateDelivery: async (id, items, deliveredAt, notes = '', driver) => {
+  updateDelivery: async (id, items, deliveredAt, notes = '', driver, payment) => {
     await save('commands.delivery.update', () =>
       rpc.updateCommandDelivery(id, {
         delivered_at: deliveredAt,
@@ -264,12 +310,15 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         driver_name: driver?.driverName ?? null,
         driver_plate: driver?.driverPlate ?? null,
         location: driver?.location ?? null,
+        ...tvaPayload(payment),
+        cash_paid: payment?.cashPaid ?? 0,
+        advance_applied: payment?.advanceApplied ?? 0,
         items: items.map(deliveryItemPayload),
       })
     );
     // les quantités déduites ont été recalculées côté serveur
     const [commands, deliveries] = await Promise.all([
-      db.commands.list(), db.commandDeliveries.list(), reloadStock(),
+      db.commands.list(), db.commandDeliveries.list(), reloadStock(), reloadSales(),
     ]);
     set({ commands, deliveries });
   },
@@ -278,7 +327,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     await save('commands.delivery.delete', () => rpc.deleteCommandDelivery(id));
     // supprimer une livraison remet les matières en stock
     const [commands, deliveries] = await Promise.all([
-      db.commands.list(), db.commandDeliveries.list(), reloadStock(),
+      db.commands.list(), db.commandDeliveries.list(), reloadStock(), reloadSales(),
     ]);
     set({ commands, deliveries });
   },

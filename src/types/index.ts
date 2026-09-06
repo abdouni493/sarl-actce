@@ -199,6 +199,14 @@ export interface Sale {
   tvaRate?: number;
   /** Montant de TVA = (total − réduction) × taux / 100. */
   tvaAmount?: number;
+  /**
+   * Bon de livraison à l'origine de cette facture : la livraison d'une
+   * commande EST une vente. La facture se comporte alors exactement comme une
+   * vente de caisse (voir, modifier, supprimer, imprimer, payer la dette).
+   */
+  deliveryId?: string;
+  /** Commande cliente à l'origine de la livraison facturée. */
+  commandId?: string;
   products: SaleLine[];
   totalAmount: number;
   reduction: number;
@@ -412,6 +420,10 @@ export interface StoreSettings {
   nis: string;
   article: string;
   rc: string;
+  /** Lieu d'activité imprimé sous la raison sociale (ex : BAHLI BLIDA). */
+  activityPlace: string;
+  /** Ville de la mention « <VILLE> LE jj/mm/aaaa » des documents. */
+  city: string;
 }
 
 // ---------- Auth ----------
@@ -588,6 +600,25 @@ export interface CommandDelivery {
   location?: string;
   /** Ancienne livraison (commande ancienne) : aucune matière retirée du stock. */
   isHistorical?: boolean;
+  /** TVA appliquée à CE bon de livraison (reprise de la commande par défaut). */
+  tvaEnabled?: boolean;
+  tvaRate?: number;
+  tvaAmount?: number;
+  /** Valeur hors taxes de la marchandise remise sur ce bon. */
+  totalHt?: number;
+  /** Net à payer de la livraison : HT + TVA. */
+  totalTtc?: number;
+  /** Part de l'acompte de la commande imputée ici — n'entre pas en caisse. */
+  advanceApplied?: number;
+  /** Argent réellement encaissé au moment de la remise. */
+  cashPaid?: number;
+  /** Total crédité à la livraison : acompte imputé + encaissements. */
+  paidAmount?: number;
+  /** Reste dû sur cette livraison — c'est la dette du client. */
+  restAmount?: number;
+  /** Facture de vente générée par ce bon. */
+  saleId?: string;
+  saleReference?: string;
   items: CommandDeliveryItem[];
   /** Matières premières déduites du stock par cette livraison. */
   consumptions?: CommandDeliveryConsumption[];

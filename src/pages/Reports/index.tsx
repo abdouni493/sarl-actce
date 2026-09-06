@@ -28,6 +28,7 @@ import { useCaisseReportStore } from '@/store/caisseReportStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { formatCurrency, formatDate, formatDateTime, isWithinRange, paymentMethodLabel } from '@/lib/utils';
 import { printDetailedReport, type ReportDoc, type PrintTableSection, type PrintRow } from '@/lib/reportPrint';
+import { commandTtc, netCommandTotals } from '@/lib/commandBilling';
 import { computeReportCalc } from '@/pages/Caisse/CaisseReports';
 import { OperationsHistory, OperationsTotals } from '@/components/shared/OperationsHistory';
 import type { Expense, CaisseTransaction } from '@/types';
@@ -93,9 +94,15 @@ export default function ReportsPage() {
     // est prévue dans la période ; une livraison compte à sa date de remise.
     const rCommands = commands.filter((c) => inRange(c.createdAt) || inRange(c.receiveDate));
     const rDeliveries = deliveries.filter((d) => inRange(d.deliveredAt));
-    const commandsTotal = rCommands.reduce((s, c) => s + c.totalAmount, 0);
+    const commandsTotal = rCommands.reduce((s, c) => s + commandTtc(c), 0);
     const commandsPaid = rCommands.reduce((s, c) => s + c.paidAmount, 0);
     const commandsRest = rCommands.reduce((s, c) => s + c.restAmount, 0);
+    /**
+     * Part des commandes qui n'est PAS encore devenue une facture de vente :
+     * chaque bon de livraison facture ce qu'il remet, on ne compte donc jamais
+     * deux fois la même marchandise dans le chiffre d'affaires ni dans la dette.
+     */
+    const commandsNet = netCommandTotals(rCommands, sales);
     const commandsOrderedQty = rCommands.reduce(
       (s, c) => s + c.items.reduce((a, i) => a + i.quantity, 0), 0
     );
@@ -130,6 +137,21 @@ export default function ReportsPage() {
         return a + i.quantity * (line?.unitPrice ?? 0);
       }, 0);
     }, 0);
+
+    // ---- Ventes de caisse VS ventes issues d'un bon de livraison ----------
+    //  Une livraison EST une vente : sa facture vit dans `sales`. On les
+    //  distingue seulement pour expliquer d'où vient le chiffre d'affaires.
+    const posSales = rSales.filter((x) => !x.deliveryId);
+    const deliverySales = rSales.filter((x) => !!x.deliveryId);
+    const posSalesTotal = posSales.reduce((s, x) => s + x.finalAmount, 0);
+    const deliverySalesTotal = deliverySales.reduce((s, x) => s + x.finalAmount, 0);
+    const deliverySalesPaid = deliverySales.reduce((s, x) => s + x.paidAmount, 0);
+    const deliverySalesRest = deliverySales.reduce((s, x) => s + x.restAmount, 0);
+    /** Valeur T.T.C réellement facturée par les bons de livraison de la période. */
+    const deliveriesInvoiced = rDeliveries.reduce((s, d) => s + (d.totalTtc ?? 0), 0);
+    const deliveriesPaid = rDeliveries.reduce((s, d) => s + (d.paidAmount ?? 0), 0);
+    const deliveriesRest = rDeliveries.reduce((s, d) => s + (d.restAmount ?? 0), 0);
+    const deliveriesTva = rDeliveries.reduce((s, d) => s + (d.tvaAmount ?? 0), 0);
 
     const totalSales = rSales.reduce((s, x) => s + x.finalAmount, 0);
     const totalPurchases = rPurchases.reduce((s, x) => s + x.totalAmount, 0);
@@ -175,7 +197,9 @@ export default function ReportsPage() {
 
     const clientDebts = rSales.filter((s) => s.restAmount > 0);
     const supplierDebts = rPurchases.filter((p) => p.restAmount > 0);
-    const totalClientDebt = clientDebts.reduce((s, x) => s + x.restAmount, 0);
+    const salesDebt = clientDebts.reduce((s, x) => s + x.restAmount, 0);
+    /** Dette client complète : factures + commandes pas encore livrées. */
+    const totalClientDebt = salesDebt + commandsNet.rest;
     const totalSupplierDebt = supplierDebts.reduce((s, x) => s + x.restAmount, 0);
 
     const stockValue = products.reduce((s, p) => s + p.currentQuantity * p.purchasePrice, 0);
@@ -309,7 +333,9 @@ export default function ReportsPage() {
       expensesByCategory, depositsByCategory, withdrawalsByCategory,
       rOldDebts, rRefunds, oldDebtsTotal, oldDebtsRest,
       clientRefundsTotal, supplierRefundsTotal, clientsCredit, suppliersCredit,
-      rCommands, rDeliveries, commandsTotal, commandsPaid, commandsRest,
+      rCommands, rDeliveries, commandsTotal, commandsPaid, commandsRest, commandsNet,
+      posSalesTotal, deliverySalesTotal, deliverySalesPaid, deliverySalesRest,
+      deliveriesInvoiced, deliveriesPaid, deliveriesRest, deliveriesTva, salesDebt,
       commandsOrderedQty, commandsDeliveredQty, commandsPendingQty, undeliveredCommands,
       deliveredQty, deliveredValue, deliveryMaterialsList, deliveryMaterialsCost,
     };
@@ -543,14 +569,17 @@ export default function ReportsPage() {
       emptyLabel: 'Aucun produit commandé sur la période',
     });
 
-    // ---- 5 sexies. Bons de livraison de la période ----
+    // ---- 5 sexies. Bons de livraison de la période (chaque bon vaut vente) ----
     sections.push({
-      title: 'Bons de livraison', icon: '🚚', headerTotal: money(report.deliveredValue),
-      note: 'Chaque bon retire du stock les matières premières de la production livrée.',
+      title: 'Bons de livraison (ventes)', icon: '🚚', headerTotal: money(report.deliveriesInvoiced),
+      note:
+        'Chaque bon de livraison est une VENTE : il facture la marchandise remise, encaisse ce que '
+        + 'le client paie et inscrit le reste en dette. Il retire aussi du stock les matières de la '
+        + 'production livrée.',
       cols: [
-        { label: 'N° bon' }, { label: 'Commande' }, { label: t('client') },
+        { label: 'N° bon' }, { label: 'Commande / Vente' }, { label: t('client') },
         { label: t('date') }, { label: 'Chauffeur' },
-        { label: 'Qté livrée', align: 'right' }, { label: 'Coût matière', align: 'right' },
+        { label: 'Net T.T.C', align: 'right' }, { label: 'Versé / Reste', align: 'right' },
       ],
       rows: [
         ...report.rDeliveries
@@ -563,12 +592,24 @@ export default function ReportsPage() {
             return [
               {
                 cells: [
-                  d.reference, cmd?.reference ?? '—', cmd?.clientName ?? '—',
+                  d.reference,
+                  `${cmd?.reference ?? '—'}${d.saleReference ? ` / ${d.saleReference}` : ''}`,
+                  cmd?.clientName ?? '—',
                   formatDateTime(d.deliveredAt, language),
                   d.driverName ? `${d.driverName}${d.driverPlate ? ` · ${d.driverPlate}` : ''}` : '—',
-                  String(Math.round(qty * 1000) / 1000), money(cost),
+                  money(d.totalTtc ?? 0),
+                  `${money(d.paidAmount ?? 0)} / ${money(d.restAmount ?? 0)}`,
                 ],
-                tone: 'accent',
+                tone: (d.restAmount ?? 0) > 0 ? 'neg' : 'pos',
+              },
+              {
+                cells: [
+                  `↳ ${Math.round(qty * 1000) / 1000} unité(s) remises · H.T ${money(d.totalHt ?? 0)}`
+                  + `${d.tvaEnabled ? ` · TVA ${d.tvaRate} % ${money(d.tvaAmount ?? 0)}` : ' · sans TVA'}`
+                  + ` · coût matière ${money(cost)}`,
+                  '',
+                ],
+                span: true, variant: 'detail', tone: 'muted',
               },
               ...d.items.map((i): PrintRow => ({
                 cells: [`↳ ${i.productName}`, `${i.quantity}${i.sellUnit ? ` ${i.sellUnit}` : ''}`],
@@ -976,6 +1017,8 @@ export default function ReportsPage() {
         { label: t('totalLossValue'), value: money(report.totalLossValue), tone: 'neg' },
         { label: t('netProfit'), value: money(report.netProfit), tone: report.netProfit >= 0 ? 'pos' : 'neg' },
         { label: t('stockValue'), value: money(report.stockValue), tone: 'accent' },
+        { label: 'Ventes caisse', value: money(report.posSalesTotal), tone: 'pos' },
+        { label: 'Livraisons facturées', value: money(report.deliverySalesTotal), tone: 'pos' },
         { label: t('clientDebts'), value: money(report.totalClientDebt), tone: 'neg' },
         { label: t('supplierDebts'), value: money(report.totalSupplierDebt), tone: 'neg' },
         { label: t('comptoirValue'), value: money(report.comptoirValue), tone: 'accent' },
@@ -1128,11 +1171,23 @@ export default function ReportsPage() {
               onClick={() => setDrill({ title: 'Commandes de la période', rows: report.rCommands.map((c) => { const d = deliveryStatus(c); return { title: `${c.reference} — ${c.clientName}`, sub: `${formatDate(c.createdAt, language)} · ${c.items.length} produit(s) · ${d.isFull ? 'livrée' : d.isPartial ? `livrée à ${d.percent.toFixed(0)} %` : 'non livrée'}`, value: c.totalAmount }; }) })} />
             <DrillCard icon={<AlertTriangle size={20} />} accent="rose" label="Reste à encaisser (commandes)" value={report.commandsRest} count={report.rCommands.filter((c) => c.restAmount > 0).length}
               onClick={() => setDrill({ title: 'Commandes non soldées', rows: report.rCommands.filter((c) => c.restAmount > 0).map((c) => ({ title: `${c.reference} — ${c.clientName}`, sub: `Payé ${formatCurrency(c.paidAmount)} · ${formatDate(c.createdAt, language)}`, value: c.restAmount, danger: true })) })} />
-            <DrillCard icon={<Truck size={20} />} accent="lavender" label="Bons de livraison" value={report.deliveredValue} count={report.rDeliveries.length}
-              onClick={() => setDrill({ title: 'Bons de livraison', rows: report.rDeliveries.map((d) => { const cmd = commands.find((c) => c.id === d.commandId); const qty = d.items.reduce((a, i) => a + i.quantity, 0); return { title: `${d.reference} — ${cmd?.clientName ?? '—'}`, sub: `${formatDateTime(d.deliveredAt, language)} · ${Math.round(qty * 1000) / 1000} livré(s)${d.driverName ? ` · ${d.driverName}` : ''}`, value: (d.consumptions ?? []).reduce((a, x) => a + x.lineCost, 0) }; }) })} />
+            <DrillCard icon={<Truck size={20} />} accent="lavender" label="Livraisons facturées (T.T.C)" value={report.deliveriesInvoiced} count={report.rDeliveries.length}
+              onClick={() => setDrill({ title: 'Bons de livraison', rows: report.rDeliveries.map((d) => { const cmd = commands.find((c) => c.id === d.commandId); const qty = d.items.reduce((a, i) => a + i.quantity, 0); return { title: `${d.reference} — ${cmd?.clientName ?? '—'}`, sub: `${formatDateTime(d.deliveredAt, language)} · ${Math.round(qty * 1000) / 1000} livré(s)${d.saleReference ? ` · vente ${d.saleReference}` : ''}${(d.restAmount ?? 0) > 0 ? ` · reste ${formatCurrency(d.restAmount ?? 0)}` : ' · réglée'}`, value: d.totalTtc ?? 0, danger: (d.restAmount ?? 0) > 0 }; }) })} />
             <DrillCard icon={<Package size={20} />} accent="caramel" label="Matières sorties par les livraisons" value={report.deliveryMaterialsCost} count={report.deliveryMaterialsList.length}
               onClick={() => setDrill({ title: 'Matières premières déduites par les livraisons', rows: report.deliveryMaterialsList.map((m) => ({ title: m.name, sub: `${Math.round(m.quantity * 1000) / 1000}${m.unit ? ` ${m.unit}` : ''} retirés du stock`, value: m.cost, danger: true })) })} />
           </div>
+          {/* Les livraisons sont des ventes : rappel du chiffre et des dettes */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <DrillCard icon={<Receipt size={20} />} accent="pistachio" label="Ventes caisse" value={report.posSalesTotal} count={report.rSales.filter((x) => !x.deliveryId).length}
+              onClick={() => setDrill({ title: 'Ventes encaissées à la caisse', rows: report.rSales.filter((x) => !x.deliveryId).map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: formatDate(x.date, language), value: x.finalAmount })) })} />
+            <DrillCard icon={<Truck size={20} />} accent="lavender" label="Ventes issues des livraisons" value={report.deliverySalesTotal} count={report.rSales.filter((x) => !!x.deliveryId).length}
+              onClick={() => setDrill({ title: 'Ventes générées par les bons de livraison', rows: report.rSales.filter((x) => !!x.deliveryId).map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: `${formatDate(x.date, language)}${x.restAmount > 0 ? ` · reste ${formatCurrency(x.restAmount)}` : ' · réglée'}`, value: x.finalAmount, danger: x.restAmount > 0 })) })} />
+            <DrillCard icon={<Coins size={20} />} accent="gold" label="Total ventes + livraisons" value={report.totalSales} count={report.rSales.length}
+              onClick={() => setDrill({ title: 'Toutes les ventes de la période', rows: report.rSales.map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: `${formatDate(x.date, language)}${x.deliveryId ? ' · bon de livraison' : ' · caisse'}`, value: x.finalAmount })) })} />
+            <DrillCard icon={<AlertTriangle size={20} />} accent="rose" label="TOTAL DETTES CLIENTS" value={report.totalClientDebt} count={report.clientDebts.length}
+              onClick={() => setDrill({ title: 'Dettes clients — factures et commandes', rows: [...report.clientDebts.map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: `${formatDate(x.date, language)}${x.deliveryId ? ' · bon de livraison' : ' · caisse'}`, value: x.restAmount, danger: true })), ...(report.commandsNet.rest > 0 ? [{ title: 'Commandes pas encore livrées', sub: 'part non encore facturée par un bon de livraison', value: report.commandsNet.rest, danger: true }] : [])] })} />
+          </div>
+
           <p className="-mt-2 rounded-xl border border-gold/25 bg-gold/8 px-3.5 py-2 text-xs font-medium text-gold-dark">
             <Truck size={12} className="inline mr-1" />
             Quantités commandées <b>{Math.round(report.commandsOrderedQty * 1000) / 1000}</b> · livrées{' '}

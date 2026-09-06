@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Receipt, ShoppingCart, ClipboardList, Truck, ChevronDown, ChevronUp, Search,
-  History, Package, Percent, Calendar, Hash, Coins, Undo2, Users,
+  History, Package, Percent, Calendar, Hash, Coins, Undo2, Users, Wallet,
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -14,6 +14,7 @@ import { useClientStore } from '@/store/clientStore';
 import { useSupplierStore } from '@/store/supplierStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel } from '@/lib/utils';
+import { commandTtc, netCommandTotals } from '@/lib/commandBilling';
 
 /* ============================================================================
  *  HISTORIQUE DÉTAILLÉ DES OPÉRATIONS
@@ -141,10 +142,8 @@ export function OperationsHistory({ inPeriod, periodLabel, defaultTab = 'sales',
 
   const salesTotal = salesRows.reduce((s, x) => s + x.finalAmount, 0);
   const purchasesTotal = purchaseRows.reduce((s, x) => s + x.totalAmount, 0);
-  const commandsTotal = commandRows.reduce((s, x) => s + x.totalAmount, 0);
-  const deliveriesQty = deliveryRows.reduce(
-    (s, d) => s + d.items.reduce((a, i) => a + i.quantity, 0), 0
-  );
+  const commandsTotal = commandRows.reduce((s, x) => s + commandTtc(x), 0);
+  const deliveriesTotal = deliveryRows.reduce((s, d) => s + (d.totalTtc ?? 0), 0);
   const oldDebtsTotal = oldDebtRows.reduce((s, x) => s + x.amount, 0);
   const refundsTotal = refundRows.reduce((s, x) => s + x.amount, 0);
 
@@ -152,7 +151,7 @@ export function OperationsHistory({ inPeriod, periodLabel, defaultTab = 'sales',
     { key: 'sales', label: 'Ventes', icon: <Receipt size={15} />, count: salesRows.length, total: formatCurrency(salesTotal) },
     { key: 'purchases', label: 'Achats', icon: <ShoppingCart size={15} />, count: purchaseRows.length, total: formatCurrency(purchasesTotal) },
     { key: 'commands', label: 'Commandes', icon: <ClipboardList size={15} />, count: commandRows.length, total: formatCurrency(commandsTotal) },
-    { key: 'deliveries', label: 'Livraisons', icon: <Truck size={15} />, count: deliveryRows.length, total: `${Math.round(deliveriesQty * 1000) / 1000} livrés` },
+    { key: 'deliveries', label: 'Livraisons (ventes)', icon: <Truck size={15} />, count: deliveryRows.length, total: formatCurrency(deliveriesTotal) },
     { key: 'oldDebts', label: 'Anciennes dettes', icon: <History size={15} />, count: oldDebtRows.length, total: formatCurrency(oldDebtsTotal) },
     { key: 'refunds', label: 'Excédents rendus', icon: <Undo2 size={15} />, count: refundRows.length, total: formatCurrency(refundsTotal) },
   ];
@@ -500,18 +499,28 @@ export function OperationsHistory({ inPeriod, periodLabel, defaultTab = 'sales',
           }, 0);
           const materials = dl.consumptions ?? [];
           const materialCost = materials.reduce((a, x) => a + x.lineCost, 0);
+          // La livraison EST une vente : c'est son TTC qui compte, et son reste
+          // dû est une DETTE inscrite sur la fiche du client.
+          const ttc = dl.totalTtc ?? value;
+          const paid = dl.paidAmount ?? 0;
+          const rest = dl.restAmount ?? Math.max(0, ttc - paid);
           return (
             <Row
               key={dl.id}
               open={open}
               onToggle={() => toggle(dl.id)}
               title={dl.reference}
-              subtitle={`${cmd?.clientName ?? '—'} · ${formatDateTime(dl.deliveredAt, language)}${cmd ? ` · commande ${cmd.reference}` : ''}`}
-              amount={value}
+              subtitle={`${cmd?.clientName ?? '—'} · ${formatDateTime(dl.deliveredAt, language)}${cmd ? ` · commande ${cmd.reference}` : ''}${dl.saleReference ? ` · vente ${dl.saleReference}` : ''}`}
+              amount={ttc}
               amountClass="text-gold-dark"
               badges={
                 <>
                   <Badge variant="success">{Math.round(qty * 1000) / 1000} livré(s)</Badge>
+                  {dl.saleReference && <Badge variant="info"><Receipt size={9} /> {dl.saleReference}</Badge>}
+                  {dl.tvaEnabled && <Badge variant="info"><Percent size={9} /> TVA {dl.tvaRate}%</Badge>}
+                  <Badge variant={rest > 0 ? 'danger' : 'success'}>
+                    <Wallet size={9} /> {rest > 0 ? `reste ${formatCurrency(rest)}` : 'payée'}
+                  </Badge>
                   {dl.driverName && <Badge variant="info"><Truck size={9} /> {dl.driverName}</Badge>}
                   {materials.length > 0 ? (
                     <Badge variant="warning"><Package size={9} /> stock déduit</Badge>
@@ -556,13 +565,43 @@ export function OperationsHistory({ inPeriod, periodLabel, defaultTab = 'sales',
                 </p>
               )}
 
+              {/* Facturation du bon — la livraison vaut vente */}
+              <DetailTable
+                title="Facturation de la livraison"
+                head={['Poste', 'Montant', '', '']}
+                rows={[
+                  ['Total H.T livré', formatCurrency(dl.totalHt ?? value), '', ''],
+                  [
+                    dl.tvaEnabled ? `TVA ${dl.tvaRate} %` : 'TVA (désactivée)',
+                    formatCurrency(dl.tvaAmount ?? 0), '', '',
+                  ],
+                  ['Net à payer T.T.C', formatCurrency(ttc), '', ''],
+                  [
+                    'Acompte de la commande imputé',
+                    formatCurrency(dl.advanceApplied ?? 0),
+                    'hors caisse', '',
+                  ],
+                  [
+                    'Encaissé à la livraison',
+                    formatCurrency(dl.cashPaid ?? 0),
+                    'entré en caisse', '',
+                  ],
+                  ['Reste dû (dette client)', formatCurrency(rest), '', ''],
+                ]}
+              />
+
               <Facts
                 items={[
                   ...(cmd ? [{ label: 'Commande', value: cmd.reference }] : []),
+                  ...(dl.saleReference ? [{ label: 'Facture de vente', value: dl.saleReference }] : []),
                   ...(cmd?.clientAddress ? [{ label: 'Adresse', value: cmd.clientAddress }] : []),
+                  { label: 'Lieu livré', value: dl.location || cmd?.clientAddress || '—' },
                   { label: 'Chauffeur', value: dl.driverName || cmd?.driverName || '—' },
                   { label: 'Matricule', value: dl.driverPlate || cmd?.driverPlate || '—' },
-                  { label: 'Valeur livrée', value: formatCurrency(value) },
+                  { label: 'Valeur livrée H.T', value: formatCurrency(dl.totalHt ?? value) },
+                  { label: 'Net à payer T.T.C', value: formatCurrency(ttc) },
+                  { label: 'Versement', value: formatCurrency(paid) },
+                  { label: 'Reste (dette)', value: formatCurrency(rest) },
                   { label: 'Coût matière', value: formatCurrency(materialCost) },
                 ]}
               />
@@ -688,16 +727,30 @@ export function OperationsTotals({ inPeriod }: { inPeriod: (date: string) => boo
     const pDel = deliveries.filter((d) => inPeriod(d.deliveredAt));
     const pOld = [...clientOldDebts, ...supplierOldDebts].filter((d) => inPeriod(d.date));
     const pRef = [...clientRefunds, ...supplierRefunds].filter((r) => inPeriod(r.refundedAt));
+
+    // Ventes de caisse et ventes issues des bons de livraison
+    const posSales = pSales.filter((x) => !x.deliveryId);
+    const delSales = pSales.filter((x) => !!x.deliveryId);
+    // Une commande deja facturee par ses livraisons ne compte plus deux fois
+    const netCmd = netCommandTotals(pCmd, sales);
+
     return {
       salesCount: pSales.length,
       salesTotal: pSales.reduce((s, x) => s + x.finalAmount, 0),
+      salesRest: pSales.reduce((s, x) => s + x.restAmount, 0),
+      posCount: posSales.length,
+      posTotal: posSales.reduce((s, x) => s + x.finalAmount, 0),
+      delSalesCount: delSales.length,
+      delSalesTotal: delSales.reduce((s, x) => s + x.finalAmount, 0),
+      delSalesRest: delSales.reduce((s, x) => s + x.restAmount, 0),
       purchasesCount: pPurch.length,
       purchasesTotal: pPurch.reduce((s, x) => s + x.totalAmount, 0),
       commandsCount: pCmd.length,
-      commandsTotal: pCmd.reduce((s, x) => s + x.totalAmount, 0),
-      commandsRest: pCmd.reduce((s, x) => s + x.restAmount, 0),
+      commandsTotal: pCmd.reduce((s, x) => s + commandTtc(x), 0),
+      commandsRest: netCmd.rest,
       deliveriesCount: pDel.length,
       deliveriesQty: pDel.reduce((s, d) => s + d.items.reduce((a, i) => a + i.quantity, 0), 0),
+      deliveriesValue: pDel.reduce((s, d) => s + (d.totalTtc ?? 0), 0),
       materialsCost: pDel.reduce(
         (s, d) => s + (d.consumptions ?? []).reduce((a, x) => a + x.lineCost, 0), 0
       ),
@@ -706,6 +759,10 @@ export function OperationsTotals({ inPeriod }: { inPeriod: (date: string) => boo
       oldDebtsRest: pOld.reduce((s, x) => s + x.restAmount, 0),
       refundsCount: pRef.length,
       refundsTotal: pRef.reduce((s, x) => s + x.amount, 0),
+      /** Ce que les clients doivent encore : ventes + part non facturee des commandes + ardoises. */
+      totalDebt:
+        pSales.reduce((s, x) => s + x.restAmount, 0) + netCmd.rest
+        + pOld.reduce((s, x) => s + x.restAmount, 0),
     };
   }, [
     sales, purchases, commands, deliveries,
@@ -713,16 +770,18 @@ export function OperationsTotals({ inPeriod }: { inPeriod: (date: string) => boo
   ]);
 
   const tiles = [
-    { icon: <Receipt size={17} />, label: 'Ventes', value: formatCurrency(stats.salesTotal), sub: `${stats.salesCount} facture(s)`, grad: 'from-[#A6E9CE] to-[#3FB591]' },
+    { icon: <Receipt size={17} />, label: 'Ventes & livraisons', value: formatCurrency(stats.salesTotal), sub: `${stats.salesCount} facture(s) · reste ${formatCurrency(stats.salesRest)}`, grad: 'from-[#A6E9CE] to-[#3FB591]' },
+    { icon: <Truck size={17} />, label: 'Dont livraisons', value: formatCurrency(stats.delSalesTotal), sub: `${stats.delSalesCount} bon(s) · reste ${formatCurrency(stats.delSalesRest)}`, grad: 'from-[#CDB0F5] to-[#9B7ED8]' },
+    { icon: <Wallet size={17} />, label: 'Dettes clients', value: formatCurrency(stats.totalDebt), sub: 'ventes + commandes + ardoises', grad: 'from-[#FF9CC0] to-[#F0568A]' },
     { icon: <ShoppingCart size={17} />, label: 'Achats', value: formatCurrency(stats.purchasesTotal), sub: `${stats.purchasesCount} facture(s)`, grad: 'from-[#FFD08A] to-[#F2944A]' },
-    { icon: <ClipboardList size={17} />, label: 'Commandes', value: formatCurrency(stats.commandsTotal), sub: `${stats.commandsCount} · reste ${formatCurrency(stats.commandsRest)}`, grad: 'from-[#FF9CC0] to-[#F0568A]' },
-    { icon: <Truck size={17} />, label: 'Livraisons', value: `${Math.round(stats.deliveriesQty * 1000) / 1000} livrés`, sub: `${stats.deliveriesCount} bon(s) · matière ${formatCurrency(stats.materialsCost)}`, grad: 'from-[#CDB0F5] to-[#9B7ED8]' },
+    { icon: <ClipboardList size={17} />, label: 'Commandes', value: formatCurrency(stats.commandsTotal), sub: `${stats.commandsCount} · non facturé ${formatCurrency(stats.commandsRest)}`, grad: 'from-[#F7B7D2] to-[#D96C9C]' },
+    { icon: <Package size={17} />, label: 'Matière livrée', value: formatCurrency(stats.materialsCost), sub: `${Math.round(stats.deliveriesQty * 1000) / 1000} unité(s) remises`, grad: 'from-[#B9E1F5] to-[#5AA8CE]' },
     { icon: <History size={17} />, label: 'Anciennes dettes', value: formatCurrency(stats.oldDebtsTotal), sub: `${stats.oldDebtsCount} ardoise(s) · reste ${formatCurrency(stats.oldDebtsRest)}`, grad: 'from-[#F5C6A5] to-[#D98E4F]' },
     { icon: <Undo2 size={17} />, label: 'Excédents rendus', value: formatCurrency(stats.refundsTotal), sub: `${stats.refundsCount} opération(s)`, grad: 'from-[#A5D8F5] to-[#4F9ED9]' },
   ];
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
       {tiles.map((tile, i) => (
         <motion.div
           key={tile.label}

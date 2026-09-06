@@ -22,3 +22,24 @@ just make it display on the history of the client and make sure to make it displ
 
 apply this updates then give me the sql code that i have to run for this new updates 
 then push all updates to rpeo with merge code directly without pull request 
+
+
+
+
+you are senor on pragramming and problems solver 
+analyze the app and fix this tasks : 
+
+fix the treatement of create the deliveries make sure to change the logic like this : the delivery means vente 
+so make sure to make it when user comes to create new delivery for a commande that equals selling but that do not meaning its payed 
+let the user when create the delivery then let him set how much the client hade payed and calculate the rest automatically and make sure to make it display on his history with detials and make that debt save also on the client card will display with that total 
+then make sure to fix the delivery creation make it when user create new delivery then its will create it as selling and displaying on the interface of ventes make sure to make all the deliveries created will display on the history of sellings exactly like the selling from pos directly 
+with button actions of edit and delete and print and pay debt 
+and make sure to make this delevries with display on the caisse transactions also with all details of if its payed or now and make it display the total of value of all the delivries and sellings 
+with value of all debts on the interface of caisse and on the interface of repports 
+
+analyse this template of bon de livraison the image that i uplad a deep analyse then make sure to make the printing template of bon de livraison and bon de commande and compte rendue and selling invoice and payment printin amke sure to make all this printing template exactly like this template with same designa and details for each template organized according to the containt of each template 
+
+fix the creation of commandes and delivery creations let the user can activate the tva of the commande and on the delivery and can inactivate it and let this informations of tva can display or not display on the printing template 
+
+apply this updates then give me the sql code that i have to run for this new updates 
+then push all updates to rpeo with merge code directly without pull request 

@@ -33,6 +33,7 @@ import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel } from '
 import { printPaymentReceipt } from '@/lib/documents';
 import { printSaleInvoice } from '@/lib/invoicePrint';
 import { computePartyBalance } from '@/lib/partyBalance';
+import { netCommandTotals } from '@/lib/commandBilling';
 import { toast } from '@/components/ui/Toast';
 import type {
   Client, PartyPayment, PaymentMethodDetails, Sale, PartyOldDebt,
@@ -88,9 +89,12 @@ export default function ClientsPage() {
     const pays = payments.filter((p) => p.partyId === clientId);
     const olds = oldDebts.filter((d) => d.partyId === clientId);
     const refs = refunds.filter((r) => r.partyId === clientId);
-    const documentsBilled = cs.reduce((s, x) => s + x.finalAmount, 0) + cc.reduce((s, x) => s + x.totalAmount, 0);
-    const documentsPaid = cs.reduce((s, x) => s + x.paidAmount, 0) + cc.reduce((s, x) => s + x.paidAmount, 0);
-    const documentsRest = cs.reduce((s, x) => s + x.restAmount, 0) + cc.reduce((s, x) => s + x.restAmount, 0);
+    // Une commande deja transformee en bon(s) de livraison est deja facturee
+    // par ses ventes : on n'ajoute que la part qui n'est pas encore livree.
+    const netCmd = netCommandTotals(cc, cs);
+    const documentsBilled = cs.reduce((s, x) => s + x.finalAmount, 0) + netCmd.billed;
+    const documentsPaid = cs.reduce((s, x) => s + x.paidAmount, 0) + netCmd.paid;
+    const documentsRest = cs.reduce((s, x) => s + x.restAmount, 0) + netCmd.rest;
     const balance = computePartyBalance({
       documentsBilled, documentsPaid, documentsRest,
       oldDebts: olds,
@@ -105,7 +109,7 @@ export default function ClientsPage() {
       oldDebtsList: [...olds].sort((a, b) => b.date.localeCompare(a.date)),
       refundsList: [...refs].sort((a, b) => b.refundedAt.localeCompare(a.refundedAt)),
       salesTotal: cs.reduce((s, x) => s + x.finalAmount, 0),
-      commandsTotal: cc.reduce((s, x) => s + x.totalAmount, 0),
+      commandsTotal: netCmd.billed,
       oldDebtsTotal: olds.reduce((s, x) => s + x.amount, 0),
       oldDebtsRest: olds.reduce((s, x) => s + x.restAmount, 0),
       refundsTotal: refs.reduce((s, x) => s + x.amount, 0),
@@ -129,14 +133,16 @@ export default function ClientsPage() {
   );
 
   const globals = useMemo(() => {
+    // Idem au global : les livraisons facturees ne sont comptees qu'une fois.
+    const netAll = netCommandTotals(commands, sales);
     const total =
-      sales.reduce((s, x) => s + x.finalAmount, 0) + commands.reduce((s, x) => s + x.totalAmount, 0)
+      sales.reduce((s, x) => s + x.finalAmount, 0) + netAll.billed
       + oldDebts.reduce((s, x) => s + x.amount, 0);
     const paid =
-      sales.reduce((s, x) => s + x.paidAmount, 0) + commands.reduce((s, x) => s + x.paidAmount, 0)
+      sales.reduce((s, x) => s + x.paidAmount, 0) + netAll.paid
       + oldDebts.reduce((s, x) => s + x.paidAmount, 0);
     const rest =
-      sales.reduce((s, x) => s + x.restAmount, 0) + commands.reduce((s, x) => s + x.restAmount, 0)
+      sales.reduce((s, x) => s + x.restAmount, 0) + netAll.rest
       + oldDebts.reduce((s, x) => s + x.restAmount, 0);
     // Avances : ce que l'entreprise doit aux clients qui ont trop verse
     const credit = clients.reduce((s, c) => s + Math.max(0, c.creditAmount ?? 0), 0);

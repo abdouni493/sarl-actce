@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Receipt, Eye, Wallet, Printer, Trash2, History, Percent } from 'lucide-react';
+import {
+  Receipt, Eye, Wallet, Printer, Trash2, History, Percent, Pencil, Truck, Store,
+} from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { Select } from '@/components/ui/Select';
@@ -11,7 +13,10 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ViewToggle } from '@/components/ui/ViewToggle';
 import { PayDebtModal } from '@/components/shared/PayDebtModal';
+import { EditSaleModal } from '@/components/shared/EditSaleModal';
+import { StatCard } from '@/components/shared/StatCard';
 import { useSalesStore } from '@/store/salesStore';
+import { useCommandStore } from '@/store/commandStore';
 import { useClientStore } from '@/store/clientStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
@@ -21,19 +26,30 @@ import { printSaleInvoice } from '@/lib/invoicePrint';
 import { toast } from '@/components/ui/Toast';
 import type { Sale } from '@/types';
 
+/** D'où vient la facture : caisse (point de vente) ou bon de livraison. */
+type OriginFilter = 'all' | 'pos' | 'delivery';
+
 export default function SalesPage() {
   const { t, language } = useLanguage();
   const { can } = usePermissions();
-  const { sales, payDebt, deleteSale } = useSalesStore();
+  const { sales, payDebt, deleteSale, updateSale } = useSalesStore();
   const clients = useClientStore((s) => s.clients);
+  const commands = useCommandStore((s) => s.commands);
+  const deliveries = useCommandStore((s) => s.deliveries);
   const settings = useSettingsStore((s) => s.settings);
 
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState<DateFilter>('all');
+  const [origin, setOrigin] = useState<OriginFilter>('all');
   const [view, setView] = useState<'cards' | 'table'>('cards');
   const [viewing, setViewing] = useState<Sale | null>(null);
   const [paying, setPaying] = useState<Sale | null>(null);
+  const [editing, setEditing] = useState<Sale | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  /** Bon de livraison et commande à l'origine d'une facture, quand il y en a. */
+  const deliveryOf = (s: Sale) => deliveries.find((d) => d.id === s.deliveryId);
+  const commandOf = (s: Sale) => commands.find((c) => c.id === s.commandId);
 
   const clientName = (id: string | null) => id ? clients.find((c) => c.id === id)?.name || '—' : t('walkIn');
 
@@ -46,16 +62,39 @@ export default function SalesPage() {
         (cl?.phone || '').includes(search) ||
         s.reference.toLowerCase().includes(q) ||
         (s.bonNumber || '').toLowerCase().includes(q);
-      return match && matchesDateFilter(s.date, dateFilter);
+      const matchesOrigin =
+        origin === 'all' ? true : origin === 'delivery' ? !!s.deliveryId : !s.deliveryId;
+      return match && matchesOrigin && matchesDateFilter(s.date, dateFilter);
     }),
-    [sales, search, dateFilter, clients]
+    [sales, search, dateFilter, origin, clients]
   );
+
+  /**
+   * Totaux de l'écran : les livraisons sont des ventes comme les autres, on
+   * distingue simplement leur origine pour la lecture.
+   */
+  const totals = useMemo(() => {
+    const all = filtered.reduce((a, s) => a + s.finalAmount, 0);
+    const fromDelivery = filtered.filter((s) => !!s.deliveryId);
+    const fromPos = filtered.filter((s) => !s.deliveryId);
+    return {
+      all,
+      posTotal: fromPos.reduce((a, s) => a + s.finalAmount, 0),
+      posCount: fromPos.length,
+      deliveryTotal: fromDelivery.reduce((a, s) => a + s.finalAmount, 0),
+      deliveryCount: fromDelivery.length,
+      debt: filtered.reduce((a, s) => a + s.restAmount, 0),
+      paid: filtered.reduce((a, s) => a + s.paidAmount, 0),
+    };
+  }, [filtered]);
 
   const handlePrint = (s: Sale) => {
     const cl = clients.find((c) => c.id === s.clientId);
     printSaleInvoice({
       reference: s.reference,
       date: s.date,
+      deliveryReference: deliveryOf(s)?.reference,
+      commandReference: commandOf(s)?.reference,
       client: {
         name: cl?.name || t('walkIn'), phone: cl?.phone, address: cl?.address,
         rc: cl?.rc, nif: cl?.nif, nis: cl?.nis, article: cl?.article,
@@ -73,12 +112,30 @@ export default function SalesPage() {
 
   return (
     <div>
-      <PageHeader title={t('sales')} icon={<Receipt size={24} />} subtitle={`${sales.length} ventes`} />
+      <PageHeader
+        title={t('sales')}
+        icon={<Receipt size={24} />}
+        subtitle={`${sales.length} vente(s) — caisse et bons de livraison réunis`}
+      />
+
+      {/* Ventes de caisse + ventes issues des livraisons + dettes */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <StatCard index={0} label="Total ventes" value={totals.all} format="currency" icon={<Receipt size={20} />} accent="gold" />
+        <StatCard index={1} label={`Ventes caisse (${totals.posCount})`} value={totals.posTotal} format="currency" icon={<Store size={20} />} accent="pistachio" />
+        <StatCard index={2} label={`Livraisons facturées (${totals.deliveryCount})`} value={totals.deliveryTotal} format="currency" icon={<Truck size={20} />} accent="lavender" />
+        <StatCard index={3} label="Dettes clients" value={totals.debt} format="currency" icon={<Wallet size={20} />} accent="rose" />
+      </div>
 
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <div className="flex-1 min-w-[200px]"><SearchBar value={search} onChange={setSearch} placeholder="Rechercher par client, n° facture ou n° bon de commande…" /></div>
         <Select value={dateFilter} onChange={(e) => setDateFilter(e.target.value as DateFilter)}
           options={[{ value: 'all', label: t('all') }, { value: 'today', label: t('today') }, { value: 'week', label: t('week') }, { value: 'month', label: t('month') }]} className="max-w-[180px]" />
+        <Select value={origin} onChange={(e) => setOrigin(e.target.value as OriginFilter)}
+          options={[
+            { value: 'all', label: 'Toutes les origines' },
+            { value: 'pos', label: 'Ventes caisse' },
+            { value: 'delivery', label: 'Bons de livraison' },
+          ]} className="max-w-[200px]" />
         <ViewToggle view={view} onChange={setView} />
       </div>
 
@@ -97,6 +154,11 @@ export default function SalesPage() {
                   {s.tvaEnabled && (
                     <Badge variant="info" className="text-[9px] px-1.5 py-0">
                       <Percent size={9} /> TVA {s.tvaRate}%
+                    </Badge>
+                  )}
+                  {s.deliveryId && (
+                    <Badge variant="info" className="text-[9px] px-1.5 py-0">
+                      <Truck size={9} /> {deliveryOf(s)?.reference ?? 'Livraison'}
                     </Badge>
                   )}
                 </h3>
@@ -119,10 +181,11 @@ export default function SalesPage() {
               </div>
               <Badge variant={s.status === 'paid' ? 'success' : 'danger'} className="mb-3 self-start">{s.status === 'paid' ? '✅ Payée' : '🔴 Dette'}</Badge>
               <div className="flex flex-wrap gap-1.5 mt-auto">
-                <Button size="sm" variant="secondary" onClick={() => setViewing(s)}><Eye size={14} /></Button>
+                <Button size="sm" variant="secondary" onClick={() => setViewing(s)} title="Détails"><Eye size={14} /></Button>
                 {can('sales', 'pay') && s.restAmount > 0 && <Button size="sm" variant="gold" onClick={() => setPaying(s)}><Wallet size={14} /> {t('pay')}</Button>}
-                <Button size="sm" variant="secondary" onClick={() => handlePrint(s)}><Printer size={14} /></Button>
-                {can('sales', 'delete') && <Button size="sm" variant="ghost" onClick={() => setDeleteId(s.id)}><Trash2 size={14} className="text-rose-deep" /></Button>}
+                {can('sales', 'edit') && <Button size="sm" variant="secondary" onClick={() => setEditing(s)} title="Modifier"><Pencil size={14} /></Button>}
+                <Button size="sm" variant="secondary" onClick={() => handlePrint(s)} title="Imprimer la facture"><Printer size={14} /></Button>
+                {can('sales', 'delete') && <Button size="sm" variant="ghost" onClick={() => setDeleteId(s.id)} title="Supprimer"><Trash2 size={14} className="text-rose-deep" /></Button>}
               </div>
             </Card>
           ))}
@@ -141,14 +204,17 @@ export default function SalesPage() {
                     {s.reference}
                     {s.isHistorical && <Badge variant="warning" className="text-[9px] px-1.5 py-0"><History size={9} /> Ancienne</Badge>}
                     {s.tvaEnabled && <Badge variant="info" className="text-[9px] px-1.5 py-0">TVA {s.tvaRate}%</Badge>}
+                    {s.deliveryId && <Badge variant="info" className="text-[9px] px-1.5 py-0"><Truck size={9} /> {deliveryOf(s)?.reference ?? 'Livraison'}</Badge>}
                   </span>
                 </td><td className="px-4 py-3">{clientName(s.clientId)}</td><td className="px-4 py-3">{formatDateTime(s.date, language)}</td>
                 <td className="px-4 py-3 text-right tabular">{formatCurrency(s.finalAmount)}</td>
                 <td className="px-4 py-3 text-right tabular"><span className={s.restAmount > 0 ? 'text-rose-deep font-bold' : ''}>{formatCurrency(s.restAmount)}</span></td>
                 <td className="px-4 py-3"><div className="flex justify-center gap-1">
-                  <Button size="icon" variant="ghost" onClick={() => setViewing(s)}><Eye size={16} /></Button>
-                  {can('sales', 'pay') && s.restAmount > 0 && <Button size="icon" variant="ghost" onClick={() => setPaying(s)}><Wallet size={16} /></Button>}
-                  <Button size="icon" variant="ghost" onClick={() => handlePrint(s)}><Printer size={16} /></Button>
+                  <Button size="icon" variant="ghost" onClick={() => setViewing(s)} title="Détails"><Eye size={16} /></Button>
+                  {can('sales', 'pay') && s.restAmount > 0 && <Button size="icon" variant="ghost" onClick={() => setPaying(s)} title="Payer la dette"><Wallet size={16} /></Button>}
+                  {can('sales', 'edit') && <Button size="icon" variant="ghost" onClick={() => setEditing(s)} title="Modifier"><Pencil size={16} /></Button>}
+                  <Button size="icon" variant="ghost" onClick={() => handlePrint(s)} title="Imprimer"><Printer size={16} /></Button>
+                  {can('sales', 'delete') && <Button size="icon" variant="ghost" onClick={() => setDeleteId(s.id)} title="Supprimer"><Trash2 size={16} className="text-rose-deep" /></Button>}
                 </div></td>
               </tr>
             ))}</tbody>
@@ -165,6 +231,16 @@ export default function SalesPage() {
                 <span className="flex items-center gap-1.5 font-bold"><History size={13} /> Ancienne vente (saisie rétroactive)</span>
                 Ni le stock ni le comptoir n'ont été modifiés ; cette vente sert à l'historique du
                 client et aux rapports.
+              </div>
+            )}
+            {viewing.deliveryId && (
+              <div className="rounded-xl border border-gold/35 bg-gold/8 px-3 py-2 text-xs font-medium text-gold-dark">
+                <span className="flex items-center gap-1.5 font-bold"><Truck size={13} /> Vente issue d'un bon de livraison</span>
+                Bon {deliveryOf(viewing)?.reference ?? '—'}
+                {commandOf(viewing) ? ` · commande ${commandOf(viewing)!.reference}` : ''}
+                {(deliveryOf(viewing)?.advanceApplied ?? 0) > 0
+                  ? ` · dont ${formatCurrency(deliveryOf(viewing)!.advanceApplied!)} imputés sur l'acompte de la commande`
+                  : ''}
               </div>
             )}
             {viewing.bonNumber && <p className="text-xs text-gold-dark font-semibold">🧾 Bon de commande N° {viewing.bonNumber}</p>}
@@ -229,9 +305,34 @@ export default function SalesPage() {
         )}
       </Modal>
 
+      <EditSaleModal
+        sale={editing}
+        onClose={() => setEditing(null)}
+        onSave={async (data) => {
+          if (!editing) return;
+          await updateSale(editing.id, data);
+          toast.success(
+            editing.deliveryId
+              ? 'Vente modifiée — le bon de livraison a été mis à jour'
+              : 'Vente modifiée'
+          );
+          setEditing(null);
+        }}
+      />
+
       {paying && <PayDebtModal open={!!paying} onClose={() => setPaying(null)} reference={paying.reference} partyName={clientName(paying.clientId)} total={paying.finalAmount} paid={paying.paidAmount} onPay={(a, _n, paidAt) => { void payDebt(paying.id, a, (paidAt || new Date().toISOString()).slice(0, 10)); }} />}
 
-      <ConfirmDialog open={!!deleteId} onClose={() => setDeleteId(null)} onConfirm={() => { if (deleteId) { void deleteSale(deleteId).then(() => toast.success('Vente supprimée')); } }} />
+      <ConfirmDialog
+        open={!!deleteId}
+        onClose={() => setDeleteId(null)}
+        title="Supprimer la vente"
+        message={
+          sales.find((s) => s.id === deleteId)?.deliveryId
+            ? "Cette vente provient d'un bon de livraison : le bon sera supprimé lui aussi, les matières reviendront en stock et la commande repassera en « non livrée »."
+            : undefined
+        }
+        onConfirm={() => { if (deleteId) { void deleteSale(deleteId).then(() => toast.success('Vente supprimée')); } }}
+      />
     </div>
   );
 }

@@ -212,6 +212,7 @@ export default function SuppliersPage() {
         type: 'purchase', reference: purchase.reference, date: purchase.date,
         partyName: supplier.name, partyPhone: supplier.phone, partyAddress: supplier.address,
         bonNumber: purchase.bonNumber, driverPlate: purchase.driverPlate,
+        historical: purchase.isHistorical,
         lines: purchase.products.map((l) => ({
           designation: l.productName || '', quantity: l.quantity, unitPrice: l.purchasePrice,
         })),

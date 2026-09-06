@@ -5,7 +5,7 @@ import {
   Wallet, Plus, Minus, ArrowDownLeft, ArrowUpRight, TrendingUp, TrendingDown,
   ShoppingCart, Banknote, Receipt, HardHat, FlaskConical, Beaker, Package,
   Pencil, Trash2, Calendar, PiggyBank, Coins, ArrowRightLeft, FileText,
-  ChevronDown, ChevronUp, Tag, Clock, History
+  ChevronDown, ChevronUp, Tag, Clock, History, Truck
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -20,6 +20,8 @@ import { OperationsHistory, OperationsTotals } from '@/components/shared/Operati
 import { toast } from '@/components/ui/Toast';
 import { useCaisseStore } from '@/store/caisseStore';
 import { useSalesStore } from '@/store/salesStore';
+import { useCommandStore } from '@/store/commandStore';
+import { useClientStore } from '@/store/clientStore';
 import { usePurchaseStore } from '@/store/purchaseStore';
 import { useExpenseStore } from '@/store/expenseStore';
 import { useProductionStore } from '@/store/productionStore';
@@ -30,6 +32,7 @@ import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useCountUp } from '@/hooks/useCountUp';
 import { formatCurrency, formatDate, todayISO } from '@/lib/utils';
+import { netCommandTotals } from '@/lib/commandBilling';
 import { cardVariants } from '@/lib/animations';
 import type { CaisseTransaction, CaisseTransactionType } from '@/types';
 
@@ -80,6 +83,9 @@ export default function CaissePage() {
   const products = useStockStore((s) => s.products);
   const categories = useStockStore((s) => s.categories);
   const workers = useWorkerStore((s) => s.workers);
+  const commands = useCommandStore((s) => s.commands);
+  const deliveries = useCommandStore((s) => s.deliveries);
+  const clientOldDebts = useClientStore((s) => s.oldDebts);
 
   const [period, setPeriod] = useState<Period>('today');
   const [from, setFrom] = useState('2026-06-01');
@@ -142,6 +148,29 @@ export default function CaissePage() {
 
     const salesTotal = pSales.reduce((s, x) => s + x.finalAmount, 0);
     const salesPaid = pSales.reduce((s, x) => s + x.paidAmount, 0);
+    // ---- Ventes de caisse VS ventes issues d'un bon de livraison ----------
+    //  Une livraison EST une vente : sa facture est dans `sales`. On l'isole
+    //  seulement pour que l'ecran dise d'ou vient le chiffre.
+    const pPosSales = pSales.filter((x) => !x.deliveryId);
+    const posSalesTotal = pPosSales.reduce((s, x) => s + x.finalAmount, 0);
+    const deliverySales = pSales.filter((x) => !!x.deliveryId);
+    const deliverySalesTotal = deliverySales.reduce((s, x) => s + x.finalAmount, 0);
+    const deliverySalesRest = deliverySales.reduce((s, x) => s + x.restAmount, 0);
+    const pDeliveries = deliveries.filter((d) => inPeriod(d.deliveredAt));
+    const deliveriesCount = pDeliveries.length;
+    // ---- Dettes clients : ventes + part des commandes non encore facturee --
+    const salesDebt = pSales.reduce((s, x) => s + x.restAmount, 0);
+    const pCommands = commands.filter((cx) => inPeriod(cx.createdAt) || inPeriod(cx.receiveDate));
+    const commandsDebt = netCommandTotals(pCommands, sales).rest;
+    const oldDebtsRest = clientOldDebts
+      .filter((d) => inPeriod(d.date))
+      .reduce((s, x) => s + x.restAmount, 0);
+    const clientDebtTotal = salesDebt + commandsDebt + oldDebtsRest;
+    /** Dette client TOUTES PERIODES — la vraie ardoise de l'entreprise. */
+    const clientDebtAll =
+      sales.reduce((s, x) => s + x.restAmount, 0)
+      + netCommandTotals(commands, sales).rest
+      + clientOldDebts.reduce((s, x) => s + x.restAmount, 0);
     const purchasesTotal = pPurch.reduce((s, x) => s + x.totalAmount, 0);
     const purchasesPaid = pPurch.reduce((s, x) => s + x.paidAmount, 0);
     const expensesTotal = pExp.reduce((s, x) => s + x.amount, 0);
@@ -253,8 +282,13 @@ export default function CaissePage() {
       periodIn, periodOut, periodNet, productSales, restItems,
       purchasesByCategory, periodProductions: pProd,
       depositCats, withdrawalCats,
+      posSalesTotal, deliverySalesTotal, deliverySalesRest, deliveriesCount,
+      salesDebt, commandsDebt, oldDebtsRest, clientDebtTotal, clientDebtAll,
     };
-  }, [transactions, sales, purchases, expenses, productions, comptoirItems, products, categories, workers, bounds, t]);
+  }, [
+    transactions, sales, purchases, expenses, productions, comptoirItems, products,
+    categories, workers, commands, deliveries, clientOldDebts, bounds, t,
+  ]);
 
   const visibleTx = useMemo(
     () =>
@@ -494,7 +528,7 @@ export default function CaissePage() {
         <Receipt size={18} className="text-gold-dark" /> {t('details')}
       </h3>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard index={0} label={t('totalSales')} value={c.salesTotal} icon={<Receipt size={18} />} format="currency" accent="pistachio" />
+        <StatCard index={0} label={`${t('totalSales')} (caisse + livraisons)`} value={c.salesTotal} icon={<Receipt size={18} />} format="currency" accent="pistachio" />
         <StatCard index={1} label={t('totalPurchasesAmount')} value={c.purchasesTotal} icon={<ShoppingCart size={18} />} format="currency" accent="caramel" />
         <StatCard index={2} label={t('totalExpenses')} value={c.expensesTotal} icon={<Banknote size={18} />} format="currency" accent="rose" />
         <StatCard index={3} label="Salaires versés" value={c.salaryPaid} icon={<HardHat size={18} />} format="currency" accent="lavender" />
@@ -505,6 +539,21 @@ export default function CaissePage() {
         <StatCard index={8} label={t('comptoirValue')} value={c.comptoirValue} icon={<Coins size={18} />} format="currency" accent="pistachio" />
         <StatCard index={9} label={t('stockValue')} value={c.stockValue} icon={<Package size={18} />} format="currency" accent="gold" />
         <StatCard index={10} label="Heures sup. à payer" value={c.overtimeUnpaid} icon={<Clock size={18} />} format="currency" accent="rose" />
+      </div>
+
+      {/* ===== Ventes de caisse, livraisons facturées et dettes clients ===== */}
+      <h3 className="font-display font-semibold text-text-primary mb-3 flex items-center gap-2">
+        <Truck size={18} className="text-gold-dark" /> Ventes, livraisons et dettes
+      </h3>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <StatCard index={0} label="Ventes caisse" value={c.posSalesTotal} icon={<Receipt size={18} />} format="currency" accent="pistachio" />
+        <StatCard index={1} label={`Livraisons facturées (${c.deliveriesCount})`} value={c.deliverySalesTotal} icon={<Truck size={18} />} format="currency" accent="lavender" />
+        <StatCard index={2} label="Total ventes + livraisons" value={c.salesTotal} icon={<Coins size={18} />} format="currency" accent="gold" />
+        <StatCard index={3} label="Encaissé sur la période" value={c.salesPaid} icon={<Wallet size={18} />} format="currency" accent="pistachio" />
+        <StatCard index={4} label="Dettes sur ventes/livraisons" value={c.salesDebt} icon={<Wallet size={18} />} format="currency" accent="rose" />
+        <StatCard index={5} label="Dettes sur commandes (non livrées)" value={c.commandsDebt} icon={<Receipt size={18} />} format="currency" accent="caramel" />
+        <StatCard index={6} label="Anciennes dettes (période)" value={c.oldDebtsRest} icon={<History size={18} />} format="currency" accent="caramel" />
+        <StatCard index={7} label="TOTAL DETTES CLIENTS (tout)" value={c.clientDebtAll} icon={<Wallet size={18} />} format="currency" accent="rose" />
       </div>
 
       {/* ===== Per-product sales (period) + comptoir rest (now) ===== */}

@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Truck, PackageCheck, AlertTriangle, CalendarClock, User, Hash, MapPin, Package, History,
+  Percent, Wallet, Receipt, PiggyBank,
 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Input, Textarea } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, DEFAULT_TVA_RATE } from '@/lib/utils';
 import { stockRequirementsForDelivery } from '@/lib/ficheStock';
 import { useFicheTechnicStore } from '@/store/ficheTechnicStore';
 import { useStockStore } from '@/store/stockStore';
 import { toast } from '@/components/ui/Toast';
-import type { Command, DeliveryDriver } from '@/store/commandStore';
+import type { Command, DeliveryDriver, DeliveryPayment } from '@/store/commandStore';
 import type { CommandDelivery, CommandDeliveryItem } from '@/types';
 
 interface DeliveryModalProps {
@@ -19,12 +20,15 @@ interface DeliveryModalProps {
   command: Command | null;
   /** When set the modal edits this delivery instead of creating a new one. */
   editing?: CommandDelivery | null;
+  /** Acompte de la commande encore disponible pour être imputé sur ce bon. */
+  advanceAvailable?: number;
   onClose: () => void;
   onSave: (
     items: CommandDeliveryItem[],
     deliveredAt: string,
     notes: string,
-    driver: DeliveryDriver
+    driver: DeliveryDriver,
+    payment: DeliveryPayment
   ) => Promise<void>;
 }
 
@@ -42,12 +46,20 @@ function toLocal(iso: string): string {
 }
 
 /**
- * Livraison d'une commande.
+ * LIVRAISON D'UNE COMMANDE — ET VENTE.
+ *
  * Pour chaque produit commandé, l'utilisateur saisit la quantité réellement
  * livrée ; le reste à livrer se recalcule immédiatement. Une commande n'est
  * marquée « livrée » que lorsque toutes les quantités ont été remises.
+ *
+ * La livraison VAUT VENTE : la valeur de la marchandise remise est facturée
+ * (TVA optionnelle), l'opérateur saisit ce que le client paie maintenant et le
+ * solde devient une DETTE inscrite sur la fiche du client. Une facture apparaît
+ * aussitôt dans « Ventes », dans la caisse et dans les rapports.
  */
-export function DeliveryModal({ open, command, editing, onClose, onSave }: DeliveryModalProps) {
+export function DeliveryModal({
+  open, command, editing, advanceAvailable = 0, onClose, onSave,
+}: DeliveryModalProps) {
   const ficheTechnics = useFicheTechnicStore((s) => s.ficheTechnics);
   const products = useStockStore((s) => s.products);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
@@ -60,6 +72,13 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
   const [driverPlate, setDriverPlate] = useState('');
   /** Lieu réellement livré — par défaut l'adresse de la commande. */
   const [location, setLocation] = useState('');
+  /** TVA de CE bon — par défaut celle de la commande, modifiable. */
+  const [tvaEnabled, setTvaEnabled] = useState(false);
+  const [tvaRate, setTvaRate] = useState(DEFAULT_TVA_RATE);
+  /** Argent réellement encaissé au moment de la remise. */
+  const [cashPaid, setCashPaid] = useState(0);
+  /** Part de l'acompte de la commande imputée sur ce bon. */
+  const [advanceApplied, setAdvanceApplied] = useState(0);
   const isHistorical = !!command?.isHistorical;
 
   useEffect(() => {
@@ -93,6 +112,15 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
       !!(cmdName || cmdPlate) && curName === cmdName && curPlate === cmdPlate
     );
     setLocation(editing?.location ?? command.clientAddress ?? '');
+
+    // TVA : celle du bon en modification, celle de la commande en création
+    const tvaOn = editing ? !!editing.tvaEnabled : !!command.tvaEnabled;
+    setTvaEnabled(tvaOn);
+    setTvaRate(
+      (editing?.tvaRate || command.tvaRate || DEFAULT_TVA_RATE) as number
+    );
+    setCashPaid(editing?.cashPaid ?? 0);
+    setAdvanceApplied(editing?.advanceApplied ?? 0);
   }, [open, command, editing]);
 
   /** Coche « même chauffeur » → on recopie celui de la commande. */
@@ -151,6 +179,19 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
   const amountNow = rows.reduce((s, r) => s + r.now * (r.item.unitPrice || 0), 0);
   const amountRemaining = rows.reduce((s, r) => s + r.remaining * (r.item.unitPrice || 0), 0);
 
+  /* ------------------------------------------------------------------------
+   *  LA LIVRAISON EST UNE VENTE : valeur HT → TVA → net à payer → reste dû.
+   * --------------------------------------------------------------------- */
+  const tvaAmount = tvaEnabled ? Math.round(amountNow * tvaRate) / 100 : 0;
+  const totalTtc = amountNow + tvaAmount;
+  /** Acompte imputable : ce qui reste de l'acompte, plafonné par la facture. */
+  const maxAdvance = Math.max(0, Math.min(advanceAvailable, totalTtc));
+  const advanceUsed = Math.max(0, Math.min(advanceApplied, maxAdvance));
+  const maxCash = Math.max(0, totalTtc - advanceUsed);
+  const cashUsed = Math.max(0, Math.min(cashPaid, maxCash));
+  const paidTotal = advanceUsed + cashUsed;
+  const restToPay = Math.max(0, totalTtc - paidTotal);
+
   const handleSave = async () => {
     if (!command) return;
     if (totalNow <= 0) { toast.error('Saisissez au moins une quantité à livrer'); return; }
@@ -169,11 +210,17 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
           quantity: r.now,
           sellUnit: r.item.sellUnit,
         }));
-      await onSave(items, new Date(deliveredAt).toISOString(), notes, {
-        driverName: driverName.trim() || undefined,
-        driverPlate: driverPlate.trim() || undefined,
-        location: location.trim() || undefined,
-      });
+      await onSave(
+        items,
+        new Date(deliveredAt).toISOString(),
+        notes,
+        {
+          driverName: driverName.trim() || undefined,
+          driverPlate: driverPlate.trim() || undefined,
+          location: location.trim() || undefined,
+        },
+        { tvaEnabled, tvaRate, cashPaid: cashUsed, advanceApplied: advanceUsed }
+      );
       onClose();
     } finally {
       setSaving(false);
@@ -430,6 +477,149 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
             )}
           </div>
           )}
+
+          {/* ---- LA LIVRAISON EST UNE VENTE : TVA + encaissement ---- */}
+          <div className="rounded-2xl border-2 border-gold/30 bg-gold/5 overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gold/20 bg-gold/10 px-4 py-2.5">
+              <p className="text-xs font-bold uppercase tracking-wider text-gold-dark flex items-center gap-2">
+                <Receipt size={14} /> Facturation de la livraison
+              </p>
+              <span className="text-[11px] italic text-text-muted">
+                Cette livraison crée une vente dans « Ventes », la caisse et les rapports.
+              </span>
+            </div>
+
+            <div className="p-4 space-y-3">
+              {/* TVA activable / désactivable */}
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-sm font-semibold text-text-primary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={tvaEnabled}
+                    onChange={(e) => setTvaEnabled(e.target.checked)}
+                    className="h-4 w-4 accent-[#B4881B]"
+                  />
+                  <Percent size={14} className="text-gold-dark" /> Appliquer la TVA sur cette livraison
+                </label>
+                {tvaEnabled && (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number" step="any" min={0} max={100}
+                      value={tvaRate}
+                      onChange={(e) => setTvaRate(Math.max(0, Number(e.target.value)))}
+                      className="w-20 h-9 rounded-lg border-2 border-[--border-input] bg-[--surface-input] px-2 text-center text-sm tabular font-semibold text-text-primary focus:outline-none focus:ring-2 focus:ring-gold/30 focus:border-gold"
+                    />
+                    <span className="text-sm font-semibold text-text-secondary">%</span>
+                    <span className="text-xs text-text-muted">
+                      = {formatCurrency(tvaAmount)}
+                    </span>
+                  </div>
+                )}
+                {!tvaEnabled && (
+                  <span className="text-xs italic text-text-muted">
+                    La TVA n'apparaîtra ni sur la facture ni sur le bon imprimé.
+                  </span>
+                )}
+              </div>
+
+              {/* Encaissement */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {maxAdvance > 0 && (
+                  <div>
+                    <label className="text-xs font-semibold text-text-secondary flex items-center gap-1.5 mb-1">
+                      <PiggyBank size={13} className="text-pistachio" />
+                      Acompte de la commande à imputer
+                      <span className="text-text-muted font-normal">
+                        (disponible {formatCurrency(maxAdvance)})
+                      </span>
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="number" step="any" min={0} max={maxAdvance}
+                        value={advanceApplied}
+                        onChange={(e) => setAdvanceApplied(Math.max(0, Number(e.target.value)))}
+                        className="flex-1 h-10 rounded-lg border-2 border-[--border-input] bg-[--surface-input] px-3 text-sm tabular font-semibold text-text-primary focus:outline-none focus:ring-2 focus:ring-gold/30 focus:border-gold"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setAdvanceApplied(maxAdvance)}
+                        className="h-10 px-3 rounded-lg border border-gold/25 text-[11px] font-semibold text-text-muted hover:bg-gold/10 hover:text-gold-dark"
+                      >
+                        Tout
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-text-muted mt-1">
+                      Déjà encaissé à la commande — n'entre pas une seconde fois en caisse.
+                    </p>
+                  </div>
+                )}
+
+                <div>
+                  <label className="text-xs font-semibold text-text-secondary flex items-center gap-1.5 mb-1">
+                    <Wallet size={13} className="text-gold-dark" />
+                    Montant payé par le client maintenant
+                  </label>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="number" step="any" min={0} max={maxCash}
+                      value={cashPaid}
+                      onChange={(e) => setCashPaid(Math.max(0, Number(e.target.value)))}
+                      className="flex-1 h-10 rounded-lg border-2 border-[--border-input] bg-[--surface-input] px-3 text-sm tabular font-bold text-text-primary focus:outline-none focus:ring-2 focus:ring-gold/30 focus:border-gold"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setCashPaid(maxCash)}
+                      className="h-10 px-3 rounded-lg border border-gold/25 text-[11px] font-semibold text-text-muted hover:bg-gold/10 hover:text-gold-dark"
+                      title="Le client solde la livraison"
+                    >
+                      Tout payer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCashPaid(0)}
+                      className="h-10 px-3 rounded-lg border border-rose-deep/25 text-[11px] font-semibold text-rose-deep hover:bg-rose-deep/10"
+                      title="Livraison entièrement à crédit"
+                    >
+                      À crédit
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-text-muted mt-1">
+                    Cet argent entre en caisse à la date de la livraison.
+                  </p>
+                </div>
+              </div>
+
+              {/* Récapitulatif de la facture générée */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                <Money label="Total H.T" value={formatCurrency(amountNow)} />
+                <Money
+                  label={tvaEnabled ? `TVA ${tvaRate} %` : 'TVA (désactivée)'}
+                  value={formatCurrency(tvaAmount)}
+                  accent={tvaEnabled ? 'text-gold-dark' : 'text-text-muted'}
+                />
+                <Money label="Net à payer T.T.C" value={formatCurrency(totalTtc)} accent="text-gold-dark" />
+                <Money label="Versement" value={formatCurrency(paidTotal)} accent="text-pistachio" />
+                <Money
+                  label="Reste (dette client)"
+                  value={formatCurrency(restToPay)}
+                  accent={restToPay > 0 ? 'text-rose-deep' : 'text-pistachio'}
+                />
+              </div>
+
+              <div
+                className={`flex items-center gap-2.5 rounded-xl border px-3 py-2 text-xs font-semibold ${
+                  restToPay > 0
+                    ? 'border-rose-deep/40 bg-rose-deep/8 text-rose-deep'
+                    : 'border-pistachio/40 bg-pistachio/10 text-pistachio'
+                }`}
+              >
+                {restToPay > 0 ? <AlertTriangle size={15} /> : <PackageCheck size={15} />}
+                {restToPay > 0
+                  ? `${formatCurrency(restToPay)} resteront dus : le montant sera ajouté à la dette de ${command.clientName} sur sa fiche client.`
+                  : 'Cette livraison est intégralement réglée : aucune dette ne sera créée.'}
+              </div>
+            </div>
+          </div>
 
           {/* Valeur de la livraison — reprise telle quelle sur le bon imprimé */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

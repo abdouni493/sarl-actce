@@ -15,6 +15,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { formatCurrency, formatDate, formatDateTime, todayISO, paymentMethodLabel } from '@/lib/utils';
 import { computePartyBalance } from '@/lib/partyBalance';
+import { netCommandTotals } from '@/lib/commandBilling';
 import { printDetailedReport, type PrintRow, type PrintTableSection } from '@/lib/reportPrint';
 import { printDeliveryPeriodReport, type DeliveryPeriodLine } from '@/lib/documents';
 import type { Client } from '@/types';
@@ -135,9 +136,12 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     const salesReduction = salesList.reduce((s, x) => s + (x.reduction || 0), 0);
     const tvaCollected = salesList.reduce((s, x) => s + (x.tvaAmount || 0), 0);
     const tvaRates = [...new Set(tvaSales.map((x) => x.tvaRate ?? 0))].sort((a, b) => a - b);
-    const commandsTotal = commandsList.reduce((s, x) => s + x.totalAmount, 0);
-    const commandsPaid = commandsList.reduce((s, x) => s + x.paidAmount, 0);
-    const commandsRest = commandsList.reduce((s, x) => s + x.restAmount, 0);
+    // Une commande deja livree est deja facturee par les ventes de ses bons :
+    // seul le solde non encore livre s'ajoute au total du compte rendu.
+    const netCmd = netCommandTotals(commandsList, sales);
+    const commandsTotal = netCmd.billed;
+    const commandsPaid = netCmd.paid;
+    const commandsRest = netCmd.rest;
     const settled = paymentsList.reduce((s, x) => s + x.amount, 0);
     const versed = versements.reduce((s, x) => s + x.amount, 0);
     const articles = salesList.reduce((s, x) => s + x.products.length, 0);
@@ -154,13 +158,11 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     const allSales = sales.filter((x) => x.clientId === client.id);
     const allCommands = commands.filter((x) => x.clientId === client.id);
     const allOldDebts = oldDebts.filter((d) => d.partyId === client.id);
+    const netAll = netCommandTotals(allCommands, allSales);
     const account = computePartyBalance({
-      documentsBilled: allSales.reduce((s, x) => s + x.finalAmount, 0)
-        + allCommands.reduce((s, x) => s + x.totalAmount, 0),
-      documentsPaid: allSales.reduce((s, x) => s + x.paidAmount, 0)
-        + allCommands.reduce((s, x) => s + x.paidAmount, 0),
-      documentsRest: allSales.reduce((s, x) => s + x.restAmount, 0)
-        + allCommands.reduce((s, x) => s + x.restAmount, 0),
+      documentsBilled: allSales.reduce((s, x) => s + x.finalAmount, 0) + netAll.billed,
+      documentsPaid: allSales.reduce((s, x) => s + x.paidAmount, 0) + netAll.paid,
+      documentsRest: allSales.reduce((s, x) => s + x.restAmount, 0) + netAll.rest,
       oldDebts: allOldDebts,
       credit: clientRows.find((c) => c.id === client.id)?.creditAmount ?? 0,
     });
@@ -686,8 +688,14 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         from: period.from,
         to: period.to,
         lines: data.deliveryLines,
-        applyTva: true,
-        tvaRate: 19,
+        // La TVA n'apparaît que si au moins un bon de la période en porte une.
+        applyTva: data.deliveriesList.some((d) => d.tvaEnabled),
+        tvaRate: data.deliveriesList.find((d) => d.tvaEnabled)?.tvaRate ?? 19,
+        versements: data.deliveriesList
+          .filter((d) => (d.cashPaid ?? 0) > 0)
+          .map((d) => ({ amount: d.cashPaid ?? 0, date: d.deliveredAt.slice(0, 10) })),
+        paidAmount: data.deliveriesList.reduce((s, d) => s + (d.paidAmount ?? 0), 0),
+        restAmount: data.deliveriesList.reduce((s, d) => s + (d.restAmount ?? 0), 0),
       },
       settings
     );

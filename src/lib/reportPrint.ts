@@ -1,11 +1,17 @@
-// ============================================================
-// Detailed, table-based report printing.
-// Produces a clean, well-organised printable document (its own
-// window) for both the Caisse reports and the global Reports page.
-// Everything is rendered as detailed tables — no app-style cards.
-// ============================================================
+// ============================================================================
+//  COMPTES RENDUS ET RAPPORTS IMPRIMÉS
+// ----------------------------------------------------------------------------
+//  Même papier à en-tête que le bon de livraison de l'entreprise :
+//  raison sociale soulignée, activité, lieu d'activité, siège social + tél,
+//  mention « <VILLE> LE jj/mm/aaaa », titre du document souligné, bloc
+//  d'identification, puis les sections en tableaux encadrés.
+//
+//  L'API publique (ReportDoc / PrintTableSection / PrintRow / PrintKpi) est
+//  inchangée : compte rendu client, compte rendu fournisseur, rapport de caisse
+//  et rapport général passent tous par `printDetailedReport()`.
+// ============================================================================
 import type { StoreSettings, Lang } from '@/types';
-import { formatDateTime } from './utils';
+import { formatDate, formatDateTime } from './utils';
 
 export type CellTone = 'default' | 'pos' | 'neg' | 'muted' | 'accent';
 export type RowVariant = 'category' | 'subheader' | 'detail' | 'subtotal' | 'total';
@@ -47,16 +53,14 @@ export interface PrintMeta {
 
 export interface ReportDoc {
   docTitle: string;   // browser tab title
-  headTitle: string;  // big printed title, e.g. "RAPPORT DE CAISSE"
+  headTitle: string;  // big printed title, e.g. "COMPTE RENDU CLIENT"
   subtitle: string;   // period / date label
   meta?: PrintMeta[];
   kpis?: PrintKpi[];
   sections: PrintTableSection[];
 }
 
-// ------------------------------------------------------------
-// Small helpers
-// ------------------------------------------------------------
+// ------------------------------------------------------------ small helpers
 function esc(v: unknown): string {
   return String(v ?? '')
     .replace(/&/g, '&amp;')
@@ -66,113 +70,94 @@ function esc(v: unknown): string {
 }
 
 const toneClass: Record<CellTone, string> = {
-  default: '',
-  pos: 'pos',
-  neg: 'neg',
-  muted: 'muted',
-  accent: 'accent',
+  default: '', pos: 'pos', neg: 'neg', muted: 'muted', accent: 'accent',
 };
 
-function logoHtml(store: StoreSettings): string {
-  if (store.logo) {
-    return `<div class="logo-box"><img src="${store.logo}" alt="logo"/></div>`;
-  }
-  return `<div class="logo-box"><span class="logo-fallback">🧪</span></div>`;
+/** Ville de l'en-tête — réglage du magasin, sinon dernier segment de l'adresse. */
+function headerCity(store: StoreSettings): string {
+  if (store.city && store.city.trim()) return store.city.trim().toUpperCase();
+  const parts = (store.address || '').split(/[,\-–]/).map((p) => p.trim()).filter(Boolean);
+  return (parts[parts.length - 1] || '').toUpperCase();
 }
 
-// ------------------------------------------------------------
-// Stylesheet — professional, print-friendly, theme accent
-// ------------------------------------------------------------
+// ------------------------------------------------------------------- styles
 const css = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  body { font-family: 'Inter','Segoe UI',Arial,sans-serif; color: #000; background: #F0F6F8; padding: 18px; font-size: 14px; font-weight: 600; line-height: 1.45; }
-  .page { max-width: 920px; margin: 0 auto; background: #fff; border: 2.5px solid #000; border-radius: 12px; overflow: hidden; }
+  body {
+    font-family: 'Times New Roman', Times, Georgia, serif;
+    color: #000; background: #E9EDF0; padding: 16px;
+    font-size: 12.5px; line-height: 1.35;
+  }
 
-  /* Toolbar (écran uniquement) */
-  .toolbar { max-width: 920px; margin: 0 auto 14px; display: flex; justify-content: flex-end; gap: 10px; }
-  .toolbar button { font: inherit; font-weight: 800; cursor: pointer; border: none; border-radius: 10px; padding: 10px 20px; color: #fff; background: #0F766E; }
-  .toolbar button.ghost { background: #fff; color: #0F766E; border: 2px solid #0F766E; }
+  .toolbar { max-width: 900px; margin: 0 auto 12px; display: flex; justify-content: flex-end; gap: 9px; }
+  .toolbar button { font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; border: 2px solid #000; border-radius: 4px; padding: 8px 20px; background: #000; color: #fff; }
+  .toolbar button.ghost { background: #fff; color: #000; }
 
-  /* Header — logo agrandi, coordonnées en gras noir */
-  .header { display: flex; align-items: center; gap: 18px; padding: 20px 24px; background: #E6F5F2; border-bottom: 3px solid #000; }
-  .logo-box { width: 110px; height: 110px; border-radius: 12px; border: 3px solid #000; background:#fff; display:flex; align-items:center; justify-content:center; overflow:hidden; flex-shrink:0; padding: 3px; }
-  .logo-box img { width:100%; height:100%; object-fit:contain; }
-  .logo-fallback { font-size: 52px; }
-  .store-info { flex:1; min-width:0; }
-  .store-name { font-size: 28px; font-weight: 900; color: #000; letter-spacing:-.4px; text-transform: uppercase; }
-  .store-tag { font-size: 13px; font-weight: 700; color:#222; font-style: italic; margin-top:2px; }
-  .store-meta { font-size: 13.5px; font-weight: 700; color: #000; margin-top: 8px; line-height: 1.75; }
-  .store-meta span { display:inline-block; margin-right:14px; }
-  .fiscal { text-align: right; font-size: 13px; font-weight: 700; color:#000; line-height:1.85; flex-shrink:0; }
-  .fiscal b { color:#000; font-weight: 900; }
+  .page { max-width: 900px; margin: 0 auto; background: #fff; border: 1.6px solid #000; padding: 12px 14px 16px; }
 
-  /* Title bar */
-  .title-bar { display:flex; justify-content:space-between; align-items:center; padding: 13px 24px; background:#000; color:#fff; }
-  .title-bar .t { font-size: 21px; font-weight: 900; letter-spacing: 1.6px; text-transform: uppercase; }
-  .title-bar .s { text-align:right; font-size:13.5px; font-weight:700; line-height:1.7; }
-  .title-bar .s b { font-size:15px; font-weight:900; }
+  /* En-tête officiel */
+  .head { border: 1.4px solid #000; padding: 9px 12px 7px; position: relative; }
+  .head .brand { text-align: center; font-size: 25px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; }
+  .head .activity { text-align: center; font-size: 16px; font-weight: 700; margin-top: 4px; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; }
+  .head .place { text-align: center; font-size: 11.5px; font-weight: 700; margin-top: 4px; text-transform: uppercase; }
+  .head .legal { text-align: center; font-size: 9.6px; font-weight: 700; margin-top: 2px; text-transform: uppercase; }
+  .head .city { text-align: right; font-size: 12.5px; font-weight: 700; font-style: italic; margin-top: 7px; text-transform: uppercase; }
+  .head .logo { position: absolute; top: 7px; left: 9px; width: 62px; height: 62px; object-fit: contain; }
 
-  .content { padding: 20px 24px 26px; }
+  .doc-title { text-align: center; font-size: 18px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.1px; margin: 12px 0 3px; text-decoration: underline; text-underline-offset: 4px; }
+  .doc-sub { text-align: center; font-size: 12px; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; }
 
-  /* Meta chips */
-  .meta { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
-  .meta .chip { background:#F4F4F4; border:2px solid #000; border-radius:8px; padding:7px 13px; font-size:13px; }
-  .meta .chip b { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:#000; font-weight:900; }
-  .meta .chip span { font-weight:900; color:#000; font-size:14px; }
+  /* Identification */
+  .meta { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  .meta td { border: 1.1px solid #000; padding: 3.5px 6px; font-size: 11.4px; }
+  .meta td.k { font-weight: 700; text-transform: uppercase; width: 22%; background: #F2F2F2; }
 
-  /* KPI summary strip */
-  .kpis { display:grid; grid-template-columns: repeat(4, 1fr); gap:9px; margin-bottom:20px; }
-  .kpi { border:2px solid #000; border-radius:9px; padding:10px 13px; background:#FAFAFA; }
-  .kpi .l { font-size:11.5px; text-transform:uppercase; letter-spacing:.6px; color:#000; font-weight:800; margin-bottom:4px; }
-  .kpi .v { font-size:18px; font-weight:900; color:#000; letter-spacing:-.2px; font-variant-numeric:tabular-nums; }
-  .kpi .v.pos { color:#0A5A38; } .kpi .v.neg { color:#8F0F22; } .kpi .v.accent { color:#000; } .kpi .v.muted { color:#333; }
+  /* Chiffres clés */
+  .kpis { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+  .kpis td { border: 1.1px solid #000; padding: 5px 7px; font-size: 11.6px; width: 25%; vertical-align: top; }
+  .kpis .l { font-size: 9.8px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+  .kpis .v { font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
 
   /* Sections */
-  .section { margin-bottom: 20px; break-inside: avoid; }
-  .section > h2 { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:15px; font-weight:900; color:#000; padding:9px 14px; background:#E6F5F2; border:2px solid #000; border-left:7px solid #000; border-radius:8px; margin-bottom:9px; text-transform:uppercase; letter-spacing:.5px; }
-  .section > h2 .htotal { font-size:15px; color:#000; font-weight:900; font-variant-numeric:tabular-nums; }
-  .section .note { font-size:12.5px; color:#222; font-weight:700; margin:-4px 0 9px 2px; font-style:italic; }
+  .section { margin-bottom: 14px; break-inside: avoid; }
+  .sec-title { display: flex; justify-content: space-between; gap: 10px; font-size: 12.8px; font-weight: 700; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; margin: 0 0 4px 2px; }
+  .sec-note { font-size: 10.8px; font-style: italic; margin: 0 0 4px 2px; }
 
-  /* Tables */
-  table { width:100%; border-collapse:collapse; font-size:13.5px; color:#000; }
-  thead { display: table-header-group; }
-  th { background:#000; color:#fff; padding:9px 11px; text-align:left; font-weight:900; font-size:12.5px; text-transform:uppercase; letter-spacing:.4px; white-space:nowrap; border:1.5px solid #000; }
-  td { padding:8px 11px; border:1.5px solid #444; vertical-align:top; font-weight:700; color:#000; }
-  tr { break-inside: avoid; }
-  tbody tr:nth-child(even) td { background:#F4F4F4; }
-  .al-right { text-align:right; } .al-center { text-align:center; }
-  td.num, th.num { text-align:right; font-variant-numeric: tabular-nums; white-space:nowrap; font-weight:800; }
+  table.data { width: 100%; border-collapse: collapse; }
+  table.data th, table.data td { border: 1.1px solid #000; padding: 3.5px 5px; font-size: 11.4px; vertical-align: top; }
+  table.data th { font-weight: 700; text-transform: uppercase; text-align: left; letter-spacing: .3px; }
+  table.data thead { display: table-header-group; }
+  table.data tr { break-inside: avoid; }
+  .al-right, th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .al-center { text-align: center; }
 
-  /* Row variants */
-  tr.r-category td { background:#CFEAE6 !important; font-weight:900; color:#000; }
-  tr.r-subheader td { background:#DDE7EA !important; font-weight:900; color:#000; }
-  tr.r-detail td.first { padding-left:24px; color:#000; }
-  tr.r-subtotal td { background:#EAF6F4 !important; font-weight:900; border-top:2px solid #000; }
-  tr.r-total td { background:#000 !important; color:#fff; font-weight:900; font-size:14px; }
-  tr.r-total td .pos, tr.r-total td .neg, tr.r-total td .accent, tr.r-total td .muted { color:#fff !important; }
+  tr.r-category td { background: #E4E4E4; font-weight: 700; text-transform: uppercase; }
+  tr.r-subheader td { background: #F0F0F0; font-weight: 700; }
+  tr.r-detail td.first { padding-left: 18px; }
+  tr.r-subtotal td { background: #F6F6F6; font-weight: 700; }
+  tr.r-total td { background: #D9D9D9; font-weight: 700; font-size: 12px; }
 
-  /* Tones on cell content */
-  .pos { color:#0A5A38; font-weight:900; } .neg { color:#8F0F22; font-weight:900; }
-  .muted { color:#333; font-weight:700; } .accent { color:#000; font-weight:900; }
+  .pos, .neg, .accent { font-weight: 700; }
+  .muted { color: #333; }
 
-  .empty { padding:15px; text-align:center; color:#222; font-weight:700; font-style:italic; border:2px dashed #000; border-radius:8px; background:#FAFAFA; }
+  .empty { border: 1.1px solid #000; padding: 8px; text-align: center; font-style: italic; font-size: 11.4px; }
 
-  /* Footer */
-  .doc-footer { margin-top:8px; padding:14px 24px; border-top:2px dashed #000; text-align:center; font-size:12.5px; font-weight:700; color:#222; }
-  .doc-footer .social { color:#000; font-weight:900; }
+  .foot { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 16px; break-inside: avoid; }
+  .foot .printed { font-size: 10.5px; font-style: italic; }
+  .foot .sign { text-align: center; font-size: 12px; font-weight: 700; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; padding-top: 34px; min-width: 140px; }
+
+  .tag { margin-top: 10px; text-align: center; font-size: 9.5px; font-style: italic; }
 
   @media print {
-    body { background:#fff; padding:0; font-size:12.5px; }
-    .toolbar { display:none !important; }
-    .page { border:none; border-radius:0; max-width:none; }
-    @page { size: A4; margin: 9mm; }
+    body { background: #fff; padding: 0; }
+    .toolbar { display: none !important; }
+    .page { border: none; max-width: none; padding: 0; }
+    @page { size: A4; margin: 10mm; }
   }
 `;
 
-// ------------------------------------------------------------
-// Rendering
-// ------------------------------------------------------------
+// ---------------------------------------------------------------- rendering
 function renderTable(sec: PrintTableSection): string {
   const nCols = sec.cols.length;
   const headCells = sec.cols
@@ -183,15 +168,13 @@ function renderTable(sec: PrintTableSection): string {
     .map((r) => {
       const cls = r.variant ? `r-${r.variant}` : '';
       if (r.span && r.cells.length >= 2) {
-        // First cell spans everything but the last (used for category headers)
         const last = r.cells[r.cells.length - 1];
         const firstAlign = sec.cols[0]?.align;
         return `<tr class="${cls}"><td colspan="${nCols - 1}" class="${firstAlign === 'right' ? 'num' : firstAlign === 'center' ? 'al-center' : ''}">${esc(r.cells[0])}</td><td class="num ${toneClass[r.tone || 'default']}">${esc(last)}</td></tr>`;
       }
       const tds = r.cells
         .map((cell, i) => {
-          const col = sec.cols[i];
-          const align = col?.align;
+          const align = sec.cols[i]?.align;
           const isLast = i === r.cells.length - 1;
           const first = i === 0 && r.variant === 'detail' ? 'first' : '';
           const alignCls = align === 'right' ? 'num' : align === 'center' ? 'al-center' : '';
@@ -206,12 +189,12 @@ function renderTable(sec: PrintTableSection): string {
   const table =
     sec.rows.length === 0
       ? `<div class="empty">${esc(sec.emptyLabel || '—')}</div>`
-      : `<table><thead><tr>${headCells}</tr></thead><tbody>${body}</tbody></table>`;
+      : `<table class="data"><thead><tr>${headCells}</tr></thead><tbody>${body}</tbody></table>`;
 
   return `
     <div class="section">
-      <h2><span>${sec.icon ? sec.icon + ' ' : ''}${esc(sec.title)}</span>${sec.headerTotal ? `<span class="htotal">${esc(sec.headerTotal)}</span>` : ''}</h2>
-      ${sec.note ? `<div class="note">${esc(sec.note)}</div>` : ''}
+      <div class="sec-title"><span>${esc(sec.title)}</span>${sec.headerTotal ? `<span>${esc(sec.headerTotal)}</span>` : ''}</div>
+      ${sec.note ? `<div class="sec-note">${esc(sec.note)}</div>` : ''}
       ${table}
     </div>`;
 }
@@ -222,80 +205,74 @@ export function printDetailedReport(doc: ReportDoc, store: StoreSettings, lang: 
 
   const dir = lang === 'ar' ? 'rtl' : 'ltr';
   const printedOn = lang === 'ar' ? 'طُبع في' : 'Imprimé le';
-  const printBtn = lang === 'ar' ? '🖨️ طباعة' : '🖨️ Imprimer';
+  const printBtn = lang === 'ar' ? 'طباعة' : 'Imprimer';
   const closeBtn = lang === 'ar' ? 'إغلاق' : 'Fermer';
-  const footerNote =
-    lang === 'ar'
-      ? 'وثيقة تم إنشاؤها تلقائياً بواسطة نظام الإدارة'
-      : 'Document généré automatiquement par le système de gestion';
 
+  const legal = [
+    store.address ? `SIEGE SOCIAL : ${store.address}` : '',
+    store.phone ? `TEL : ${store.phone}` : '',
+  ].filter(Boolean).join('  ');
   const fiscal = [
-    store.rc ? `<div><b>RC:</b> ${esc(store.rc)}</div>` : '',
-    store.nif ? `<div><b>NIF:</b> ${esc(store.nif)}</div>` : '',
-    store.nis ? `<div><b>NIS:</b> ${esc(store.nis)}</div>` : '',
-    store.article ? `<div><b>Art:</b> ${esc(store.article)}</div>` : '',
-  ].join('');
+    store.rc ? `R.C : ${store.rc}` : '',
+    store.nif ? `NIF : ${store.nif}` : '',
+    store.nis ? `NIS : ${store.nis}` : '',
+    store.article ? `ART : ${store.article}` : '',
+  ].filter(Boolean).join('  |  ');
+  const city = headerCity(store);
 
   const metaHtml = doc.meta && doc.meta.length
-    ? `<div class="meta">${doc.meta
-        .map((m) => `<div class="chip"><b>${esc(m.label)}</b><span>${esc(m.value)}</span></div>`)
-        .join('')}</div>`
+    ? `<table class="meta">${doc.meta
+        .map((m) => `<tr><td class="k">${esc(m.label)}</td><td>${esc(m.value)}</td></tr>`)
+        .join('')}</table>`
     : '';
 
-  const kpisHtml = doc.kpis && doc.kpis.length
-    ? `<div class="kpis">${doc.kpis
-        .map((k) => `<div class="kpi"><div class="l">${esc(k.label)}</div><div class="v ${k.tone || ''}">${esc(k.value)}</div></div>`)
-        .join('')}</div>`
-    : '';
+  const kpiCells = (doc.kpis ?? []).map(
+    (k) => `<td><div class="l">${esc(k.label)}</div><div class="v ${k.tone || ''}">${esc(k.value)}</div></td>`
+  );
+  const kpiRows: string[] = [];
+  for (let i = 0; i < kpiCells.length; i += 4) {
+    const slice = kpiCells.slice(i, i + 4);
+    while (slice.length < 4) slice.push('<td></td>');
+    kpiRows.push(`<tr>${slice.join('')}</tr>`);
+  }
+  const kpisHtml = kpiRows.length ? `<table class="kpis">${kpiRows.join('')}</table>` : '';
 
   const sectionsHtml = doc.sections.map(renderTable).join('');
 
-  win.document.write(`
-    <!doctype html>
-    <html lang="${lang}" dir="${dir}">
-      <head>
-        <meta charset="utf-8" />
-        <title>${esc(doc.docTitle)}</title>
-        <style>${css}</style>
-      </head>
-      <body>
-        <div class="toolbar">
-          <button onclick="window.print()">${printBtn}</button>
-          <button class="ghost" onclick="window.close()">${closeBtn}</button>
-        </div>
-        <div class="page">
-          <div class="header">
-            ${logoHtml(store)}
-            <div class="store-info">
-              <div class="store-name">${esc(store.name || '')}</div>
-              ${store.description ? `<div class="store-tag">${esc(store.description)}</div>` : ''}
-              <div class="store-meta">
-                ${store.address ? `<span>📍 ${esc(store.address)}</span>` : ''}
-                ${store.phone ? `<span>📞 ${esc(store.phone)}</span>` : ''}
-                ${store.email ? `<span>✉️ ${esc(store.email)}</span>` : ''}
-              </div>
-            </div>
-            ${fiscal ? `<div class="fiscal">${fiscal}</div>` : ''}
-          </div>
+  win.document.write(`<!doctype html>
+<html lang="${lang}" dir="${dir}">
+  <head><meta charset="utf-8"/><title>${esc(doc.docTitle)}</title><style>${css}</style></head>
+  <body>
+    <div class="toolbar">
+      <button onclick="window.print()">${printBtn}</button>
+      <button class="ghost" onclick="window.close()">${closeBtn}</button>
+    </div>
+    <div class="page">
+      <div class="head">
+        ${store.logo ? `<img class="logo" src="${store.logo}" alt=""/>` : ''}
+        <div class="brand">${esc(store.name || 'ALTECH PRODUCTION')}</div>
+        ${store.description ? `<div class="activity">${esc(store.description)}</div>` : ''}
+        ${store.activityPlace ? `<div class="place">LIEU D'ACTIVITE : ${esc(store.activityPlace)}</div>` : ''}
+        ${legal ? `<div class="legal">${esc(legal)}</div>` : ''}
+        ${fiscal ? `<div class="legal">${esc(fiscal)}</div>` : ''}
+        <div class="city">${city ? `${esc(city)} LE ` : 'LE '}${esc(formatDate(new Date(), lang))}</div>
+      </div>
 
-          <div class="title-bar">
-            <div class="t">${esc(doc.headTitle)}</div>
-            <div class="s"><b>${esc(doc.subtitle)}</b><br/>${printedOn}: ${esc(formatDateTime(new Date(), lang))}</div>
-          </div>
+      <div class="doc-title">${esc(doc.headTitle)}</div>
+      <div class="doc-sub">${esc(doc.subtitle)}</div>
 
-          <div class="content">
-            ${metaHtml}
-            ${kpisHtml}
-            ${sectionsHtml}
-          </div>
+      ${metaHtml}
+      ${kpisHtml}
+      ${sectionsHtml}
 
-          <div class="doc-footer">
-            ${store.socialMedia ? `<span class="social">🌐 ${esc(store.socialMedia)}</span> — ` : ''}${footerNote}
-          </div>
-        </div>
-        <script>window.onload=function(){setTimeout(function(){window.print();},400);};</script>
-      </body>
-    </html>
-  `);
+      <div class="foot">
+        <div class="printed">${printedOn} : ${esc(formatDateTime(new Date(), lang))}</div>
+        <div class="sign">Signature</div>
+      </div>
+      ${store.socialMedia ? `<div class="tag">${esc(store.socialMedia)}</div>` : ''}
+    </div>
+    <script>window.onload=function(){setTimeout(function(){window.print();},400);};<\/script>
+  </body>
+</html>`);
   win.document.close();
 }

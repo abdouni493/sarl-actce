@@ -11,6 +11,11 @@ import type { Sale } from '@/types';
  * les lignes ont déjà décrémenté le comptoir, elles ne sont pas rejouées.
  * Le reste dû, le statut, l'écriture de caisse et la dette client sont
  * recalculés par la base de données.
+ *
+ * Cas particulier : une facture issue d'un BON DE LIVRAISON. Livraison et vente
+ * sont la même opération — la base répercute donc la modification sur le bon
+ * (date, encaissement) puis reconstruit la facture. La réduction n'existe pas
+ * sur ce type de facture : le montant vient des quantités réellement remises.
  */
 export function EditSaleModal({
   sale, onClose, onSave,
@@ -33,8 +38,11 @@ export function EditSaleModal({
     setNote('');
   }, [sale]);
 
+  const fromDelivery = !!sale?.deliveryId;
   const total = sale?.totalAmount ?? 0;
-  const finalAmount = Math.max(0, total - Math.min(reduction, total));
+  const baseHT = Math.max(0, total - Math.min(fromDelivery ? 0 : reduction, total));
+  const tvaAmount = sale?.tvaEnabled ? Math.round(baseHT * (sale.tvaRate ?? 19)) / 100 : 0;
+  const finalAmount = baseHT + tvaAmount;
   const rest = Math.max(0, finalAmount - Math.min(paidAmount, finalAmount));
 
   return (
@@ -42,19 +50,29 @@ export function EditSaleModal({
       <div className="space-y-4">
         <div className="rounded-xl border border-gold/15 bg-vanilla/40 px-3.5 py-2.5 text-xs text-text-secondary">
           <div className="flex justify-between">
-            <span>Total des articles</span>
+            <span>Total des articles H.T</span>
             <span className="tabular font-bold text-text-primary">{formatCurrency(total)}</span>
           </div>
+          {sale?.tvaEnabled && (
+            <div className="flex justify-between mt-0.5">
+              <span>TVA {sale.tvaRate} %</span>
+              <span className="tabular font-bold text-gold-dark">+ {formatCurrency(tvaAmount)}</span>
+            </div>
+          )}
           <p className="mt-1 text-[11px] italic text-text-muted">
-            Les lignes de la vente ne sont pas modifiables ici : le stock du comptoir a déjà été décrémenté.
+            {fromDelivery
+              ? "Facture issue d'un bon de livraison : le montant vient des quantités remises. Le montant payé saisi ici met à jour l'encaissement du bon et la caisse."
+              : 'Les lignes de la vente ne sont pas modifiables ici : le stock du comptoir a déjà été décrémenté.'}
           </p>
         </div>
 
         <Input label="Date de la vente" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        <Input
-          label="Réduction (DA)" type="number" step="any" min={0}
-          value={reduction} onChange={(e) => setReduction(Math.max(0, Number(e.target.value)))}
-        />
+        {!fromDelivery && (
+          <Input
+            label="Réduction (DA)" type="number" step="any" min={0}
+            value={reduction} onChange={(e) => setReduction(Math.max(0, Number(e.target.value)))}
+          />
+        )}
         <Input
           label="Montant payé (DA)" type="number" step="any" min={0}
           value={paidAmount} onChange={(e) => setPaidAmount(Math.max(0, Number(e.target.value)))}

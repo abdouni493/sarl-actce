@@ -575,6 +575,11 @@ export default function POS() {
         driverName: cmd.driverName,
         driverPlate: cmd.driverPlate,
         notes: cmd.notes,
+        historical: cmd.isHistorical,
+        tvaEnabled: cmd.tvaEnabled,
+        tvaRate: cmd.tvaRate,
+        tvaAmount: cmd.tvaAmount,
+        totalTtc: cmd.totalTtc ?? cmd.totalAmount,
         lines: cmd.items.map((l) => ({
           productName: l.productName,
           quantity: l.quantity,

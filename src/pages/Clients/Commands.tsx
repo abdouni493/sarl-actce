@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   ShoppingCart, Plus, Search, Calendar, Clock, Eye, Pencil, Trash2, CheckCircle2,
   AlertTriangle, Printer, UserPlus, X, Coins, User, Phone, Receipt, Truck,
-  PackageCheck, History, ClipboardList, MapPin, Hash, Package,
+  PackageCheck, History, ClipboardList, MapPin, Hash, Package, Percent, Wallet,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -20,14 +20,16 @@ import { toast } from '@/components/ui/Toast';
 import { DeliveryModal } from './DeliveryModal';
 import {
   useCommandStore, deliveryStatus,
-  type Command, type CommandLine, type DeliveryDriver,
+  type Command, type CommandLine, type DeliveryDriver, type DeliveryPayment,
 } from '@/store/commandStore';
+import { useSalesStore } from '@/store/salesStore';
 import { useClientStore } from '@/store/clientStore';
 import { useFicheTechnicStore } from '@/store/ficheTechnicStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
-import { formatCurrency, formatDate, formatDateTime, todayISO } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime, todayISO, DEFAULT_TVA_RATE } from '@/lib/utils';
+import { commandTtc, deliverySalesOf } from '@/lib/commandBilling';
 import { printCommandOrder, printDeliveryNote } from '@/lib/documents';
 import { cardVariants } from '@/lib/animations';
 import type { Client, CommandDelivery } from '@/types';
@@ -45,6 +47,7 @@ export default function CommandsPage() {
     addDelivery, updateDelivery, deleteDelivery,
   } = useCommandStore();
   const { clients, addClient, updateClient } = useClientStore();
+  const sales = useSalesStore((s) => s.sales);
   const { ficheTechnics } = useFicheTechnicStore();
   const settings = useSettingsStore((s) => s.settings);
 
@@ -80,6 +83,9 @@ export default function CommandsPage() {
   const [receiveMinute, setReceiveMinute] = useState('30');
   const [customTotal, setCustomTotal] = useState<number | null>(null);
   const [versement, setVersement] = useState(0);
+  /** TVA de la commande — activable / désactivable, reprise sur les livraisons. */
+  const [tvaEnabled, setTvaEnabled] = useState(false);
+  const [tvaRate, setTvaRate] = useState(DEFAULT_TVA_RATE);
   const [bonNumber, setBonNumber] = useState('');
   const [createdDate, setCreatedDate] = useState(todayISO());
   const [originalCreatedDate, setOriginalCreatedDate] = useState(todayISO());
@@ -102,6 +108,35 @@ export default function CommandsPage() {
 
   const deliveriesOf = (commandId: string) =>
     deliveries.filter((d) => d.commandId === commandId).sort((a, b) => b.deliveredAt.localeCompare(a.deliveredAt));
+
+  /**
+   * Acompte de la commande pas encore imputé sur un bon de livraison.
+   * C'est ce montant que l'opérateur peut déduire du prochain bon sans que
+   * l'argent n'entre une seconde fois en caisse.
+   */
+  const advanceAvailableOf = (cmd: Command | null) => {
+    if (!cmd) return 0;
+    const used = deliveries
+      .filter((d) => d.commandId === cmd.id)
+      .reduce((s, d) => s + (d.advanceApplied ?? 0), 0);
+    return Math.max(0, (cmd.advancePaid ?? 0) + (cmd.extraPaid ?? 0) - used);
+  };
+
+  /** Versements imprimés en bas du bon de commande. */
+  const versementsOf = (cmd: Command) => {
+    const rows: { amount: number; date: string; label?: string }[] = [];
+    if (cmd.advancePaid > 0) {
+      rows.push({ amount: cmd.advancePaid, date: cmd.createdAt.slice(0, 10) });
+    }
+    deliveries
+      .filter((d) => d.commandId === cmd.id && (d.cashPaid ?? 0) > 0)
+      .sort((a, b) => a.deliveredAt.localeCompare(b.deliveredAt))
+      .forEach((d) => rows.push({ amount: d.cashPaid ?? 0, date: d.deliveredAt.slice(0, 10) }));
+    if ((cmd.extraPaid ?? 0) > 0) {
+      rows.push({ amount: cmd.extraPaid ?? 0, date: todayISO(), label: 'Règlements sur la commande' });
+    }
+    return rows;
+  };
 
   /* --------------------------------------------------------------- filters */
   const filteredCommands = useMemo(() => {
@@ -148,10 +183,15 @@ export default function CommandsPage() {
   const stats = useMemo(() => {
     const totalPaid = filteredCommands.reduce((s, c) => s + c.paidAmount, 0);
     const totalRest = filteredCommands.reduce((s, c) => s + c.restAmount, 0);
-    const totalValue = filteredCommands.reduce((s, c) => s + c.totalAmount, 0);
+    const totalValue = filteredCommands.reduce((s, c) => s + commandTtc(c), 0);
     const pendingDelivery = filteredCommands.filter((c) => !deliveryStatus(c).isFull).length;
-    return { totalPaid, totalRest, totalValue, pendingDelivery };
-  }, [filteredCommands]);
+    // Ce qui a réellement été FACTURÉ par les livraisons (elles valent vente)
+    const ids = new Set(filteredCommands.map((c) => c.id));
+    const linked = sales.filter((x) => !!x.deliveryId && x.commandId && ids.has(x.commandId));
+    const invoiced = linked.reduce((s, x) => s + x.finalAmount, 0);
+    const invoicedRest = linked.reduce((s, x) => s + x.restAmount, 0);
+    return { totalPaid, totalRest, totalValue, pendingDelivery, invoiced, invoicedRest };
+  }, [filteredCommands, sales]);
 
   const clientSearchResults = useMemo(
     () =>
@@ -228,6 +268,7 @@ export default function CommandsPage() {
     setEditingId(null); setSelectedClient(null); setSelectedItems([]);
     setReceiveDate(todayISO()); setReceiveHour('14'); setReceiveMinute('30');
     setCustomTotal(null); setVersement(0); setClientSearch(''); setRecipeSearch('');
+    setTvaEnabled(false); setTvaRate(DEFAULT_TVA_RATE);
     setBonNumber(''); setCreatedDate(todayISO()); setOriginalCreatedDate(todayISO());
     setFormHistorical(historical);
     // l'adresse et le chauffeur sont redemandés à chaque nouvelle commande
@@ -252,6 +293,7 @@ export default function CommandsPage() {
     setSelectedItems(cmd.items);
     setReceiveDate(cmd.receiveDate); setReceiveHour(cmd.receiveHour); setReceiveMinute(cmd.receiveMinute);
     setCustomTotal(cmd.totalAmount); setVersement(cmd.paidAmount);
+    setTvaEnabled(!!cmd.tvaEnabled); setTvaRate(cmd.tvaRate || DEFAULT_TVA_RATE);
     setBonNumber(cmd.bonNumber || '');
     setCreatedDate(cmd.createdAt.slice(0, 10)); setOriginalCreatedDate(cmd.createdAt.slice(0, 10));
     setFormOpen(true);
@@ -293,6 +335,8 @@ export default function CommandsPage() {
         receiveDate, receiveHour, receiveMinute,
         items: selectedItems,
         totalAmount: finalTotalAmount,
+        tvaEnabled,
+        tvaRate: tvaEnabled ? tvaRate : 0,
         advancePaid: versement,
         paidAmount: versement,
         bonNumber: bonNumber.trim() || undefined,
@@ -322,19 +366,25 @@ export default function CommandsPage() {
     items: Parameters<typeof addDelivery>[1],
     deliveredAt: string,
     notes: string,
-    driver: DeliveryDriver
+    driver: DeliveryDriver,
+    payment: DeliveryPayment
   ) => {
     if (!deliverCmd) return;
     if (editingDelivery) {
-      await updateDelivery(editingDelivery.id, items, deliveredAt, notes, driver);
-      toast.success('Livraison modifiée');
+      await updateDelivery(editingDelivery.id, items, deliveredAt, notes, driver, payment);
+      toast.success('Livraison modifiée — la facture de vente a été mise à jour');
       setEditingDelivery(null);
       setDeliverCmd(null);
       return;
     }
-    const delivery = await addDelivery(deliverCmd.id, items, deliveredAt, notes, driver);
+    const delivery = await addDelivery(deliverCmd.id, items, deliveredAt, notes, driver, payment);
     const refreshed = useCommandStore.getState().commands.find((c) => c.id === deliverCmd.id) ?? deliverCmd;
-    toast.success('Livraison enregistrée');
+    const rest = delivery?.restAmount ?? 0;
+    toast.success(
+      rest > 0
+        ? `Livraison enregistrée — vente ${delivery?.saleReference ?? ''} · dette de ${formatCurrency(rest)} ajoutée au client`
+        : `Livraison enregistrée — vente ${delivery?.saleReference ?? ''} réglée`
+    );
     setDeliverCmd(null);
     if (delivery) setPrintPrompt({ kind: 'delivery', cmd: refreshed, delivery });
   };
@@ -359,6 +409,16 @@ export default function CommandsPage() {
         ...clientFiscalOf(cmd),
         location: delivery.location || cmd.clientAddress,
         historical: delivery.isHistorical ?? cmd.isHistorical,
+        tvaEnabled: delivery.tvaEnabled,
+        tvaRate: delivery.tvaRate,
+        tvaAmount: delivery.tvaAmount,
+        deliveryTotalHt: delivery.totalHt,
+        deliveryTotalTtc: delivery.totalTtc,
+        deliveryPaid: delivery.paidAmount,
+        deliveryRest: delivery.restAmount,
+        advanceApplied: delivery.advanceApplied,
+        cashPaid: delivery.cashPaid,
+        saleReference: delivery.saleReference,
         deliveredAt: delivery.deliveredAt,
         notes: delivery.notes,
         driverName: delivery.driverName || cmd.driverName,
@@ -377,7 +437,7 @@ export default function CommandsPage() {
             unitPrice: it.unitPrice,
           };
         }),
-        totalAmount: cmd.totalAmount,
+        totalAmount: commandTtc(cmd),
         paidAmount: cmd.paidAmount,
         restAmount: cmd.restAmount,
       },
@@ -411,6 +471,11 @@ export default function CommandsPage() {
         clientAddress: cmd.clientAddress,
         ...clientFiscalOf(cmd),
         historical: cmd.isHistorical,
+        tvaEnabled: cmd.tvaEnabled,
+        tvaRate: cmd.tvaRate,
+        tvaAmount: cmd.tvaAmount,
+        totalTtc: commandTtc(cmd),
+        versements: versementsOf(cmd),
         driverName: cmd.driverName,
         driverPlate: cmd.driverPlate,
         notes: cmd.notes,
@@ -476,10 +541,24 @@ export default function CommandsPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total commandes" value={stats.totalValue} format="currency" icon={<Receipt size={22} />} index={0} accent="gold" />
+        <StatCard label="Total commandes TTC" value={stats.totalValue} format="currency" icon={<Receipt size={22} />} index={0} accent="gold" />
         <StatCard label="Total versé" value={stats.totalPaid} format="currency" icon={<CheckCircle2 size={22} />} index={1} accent="pistachio" />
         <StatCard label="Dettes restantes" value={stats.totalRest} format="currency" icon={<Coins size={22} />} index={2} accent="rose" />
         <StatCard label="À livrer" value={stats.pendingDelivery} icon={<Truck size={22} />} index={3} accent="caramel" />
+      </div>
+
+      {/* Les livraisons valent VENTE : rappel du chiffre réellement facturé */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <StatCard
+          label="Facturé par les livraisons (ventes)"
+          value={stats.invoiced} format="currency"
+          icon={<Truck size={22} />} index={4} accent="pistachio"
+        />
+        <StatCard
+          label="Dettes issues des livraisons"
+          value={stats.invoicedRest} format="currency"
+          icon={<Wallet size={22} />} index={5} accent="rose"
+        />
       </div>
 
       {/* Filters */}
@@ -664,7 +743,17 @@ export default function CommandsPage() {
                   {/* Money */}
                   <div className="border-t border-gold/10 pt-3 space-y-1 text-xs bg-vanilla/30 p-2.5 rounded-xl mb-3">
                     <div className="flex justify-between text-text-muted">
-                      <span>Total</span><span className="font-bold text-text-primary">{formatCurrency(cmd.totalAmount)}</span>
+                      <span>Total H.T</span><span className="font-bold text-text-primary">{formatCurrency(cmd.totalAmount)}</span>
+                    </div>
+                    {cmd.tvaEnabled && (
+                      <div className="flex justify-between text-text-muted">
+                        <span className="flex items-center gap-1"><Percent size={10} /> TVA {cmd.tvaRate}%</span>
+                        <span className="font-semibold text-gold-dark">+ {formatCurrency(cmd.tvaAmount ?? 0)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-text-muted">
+                      <span>{cmd.tvaEnabled ? 'Total TTC' : 'Net à payer'}</span>
+                      <span className="font-bold text-gold-dark">{formatCurrency(commandTtc(cmd))}</span>
                     </div>
                     <div className="flex justify-between text-text-muted">
                       <span>Versé</span><span className="font-semibold text-pistachio">{formatCurrency(cmd.paidAmount)}</span>
@@ -1032,9 +1121,62 @@ export default function CommandsPage() {
             />
           </div>
 
+          {/* TVA de la commande — activable / désactivable */}
+          <div className="border border-gold/20 rounded-2xl p-4 bg-vanilla/40 space-y-2">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-sm font-semibold text-text-primary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={tvaEnabled}
+                  onChange={(e) => setTvaEnabled(e.target.checked)}
+                  className="h-4 w-4 accent-[#B4881B]"
+                />
+                <Percent size={14} className="text-gold-dark" /> Appliquer la TVA sur cette commande
+              </label>
+              {tvaEnabled && (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number" step="any" min={0} max={100}
+                    value={tvaRate}
+                    onChange={(e) => setTvaRate(Math.max(0, Number(e.target.value)))}
+                    className="w-20 h-9 rounded-lg border-2 border-[--border-input] bg-[--surface-input] px-2 text-center text-sm tabular font-semibold text-text-primary focus:outline-none focus:ring-2 focus:ring-gold/30 focus:border-gold"
+                  />
+                  <span className="text-sm font-semibold text-text-secondary">%</span>
+                  <span className="text-xs text-text-muted">
+                    = {formatCurrency(Math.round(finalTotalAmount * tvaRate) / 100)}
+                  </span>
+                </div>
+              )}
+            </div>
+            <p className="text-[11px] text-text-muted">
+              {tvaEnabled
+                ? 'La TVA sera imprimée sur le bon de commande et proposée par défaut sur chaque livraison.'
+                : "TVA désactivée : elle n'apparaîtra sur aucun document imprimé de cette commande."}
+            </p>
+            <div className="grid grid-cols-3 gap-2 pt-1">
+              <Tile label="Total H.T" value={formatCurrency(finalTotalAmount)} />
+              <Tile
+                label={tvaEnabled ? `TVA ${tvaRate}%` : 'TVA (désactivée)'}
+                value={formatCurrency(tvaEnabled ? Math.round(finalTotalAmount * tvaRate) / 100 : 0)}
+                color={tvaEnabled ? 'text-gold-dark' : 'text-text-muted'}
+              />
+              <Tile
+                label="Net à payer T.T.C"
+                value={formatCurrency(
+                  finalTotalAmount + (tvaEnabled ? Math.round(finalTotalAmount * tvaRate) / 100 : 0)
+                )}
+                color="text-gold-dark"
+              />
+            </div>
+          </div>
+
           <div className="flex justify-between items-center p-3 rounded-xl bg-gold/10 border border-gold/30 text-gold-dark font-bold text-xs">
             <span>Reste à payer (dette enregistrée)</span>
-            <span className="text-sm tabular text-rose-deep">{formatCurrency(Math.max(0, finalTotalAmount - versement))}</span>
+            <span className="text-sm tabular text-rose-deep">
+              {formatCurrency(Math.max(0,
+                finalTotalAmount + (tvaEnabled ? Math.round(finalTotalAmount * tvaRate) / 100 : 0) - versement
+              ))}
+            </span>
           </div>
 
           <div className="flex justify-end gap-2 pt-2 border-t border-gold/10">
@@ -1112,11 +1254,39 @@ export default function CommandsPage() {
                 </table>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
-                <Tile label="Total" value={formatCurrency(viewingCmd.totalAmount)} />
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                <Tile label="Total H.T" value={formatCurrency(viewingCmd.totalAmount)} />
+                <Tile
+                  label={viewingCmd.tvaEnabled ? `TVA ${viewingCmd.tvaRate}%` : 'TVA (désactivée)'}
+                  value={formatCurrency(viewingCmd.tvaAmount ?? 0)}
+                  color={viewingCmd.tvaEnabled ? 'text-gold-dark' : 'text-text-muted'}
+                />
+                <Tile label="Net T.T.C" value={formatCurrency(commandTtc(viewingCmd))} color="text-gold-dark" />
                 <Tile label="Versé" value={formatCurrency(viewingCmd.paidAmount)} color="text-pistachio" />
                 <Tile label="Reste" value={formatCurrency(viewingCmd.restAmount)} color="text-rose-deep" />
               </div>
+
+              {/* Factures de vente engendrées par les livraisons */}
+              {deliverySalesOf(viewingCmd.id, sales).length > 0 && (
+                <div className="rounded-xl border border-gold/20 bg-vanilla/40 p-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-gold-dark flex items-center gap-1.5 mb-2">
+                    <Receipt size={12} /> Ventes générées par les livraisons
+                  </p>
+                  {deliverySalesOf(viewingCmd.id, sales).map((sv) => (
+                    <div key={sv.id} className="flex justify-between text-xs py-1 border-b border-gold/5 last:border-0">
+                      <span className="text-text-secondary">
+                        {sv.reference} · {formatDate(sv.date, language)}
+                      </span>
+                      <span className="tabular">
+                        {formatCurrency(sv.finalAmount)}
+                        <span className={sv.restAmount > 0 ? 'text-rose-deep font-bold ml-2' : 'text-pistachio font-bold ml-2'}>
+                          {sv.restAmount > 0 ? `reste ${formatCurrency(sv.restAmount)}` : 'réglée'}
+                        </span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-2 border-t border-gold/10">
                 <Button variant="secondary" onClick={() => printBonDeCommande(viewingCmd)}>
@@ -1171,6 +1341,11 @@ export default function CommandsPage() {
                             <Truck size={14} className="text-gold" /> {dl.reference}
                           </p>
                           <p className="text-[11px] text-text-muted">{formatDateTime(dl.deliveredAt)}</p>
+                          {dl.saleReference && (
+                            <p className="text-[11px] font-semibold text-pistachio flex items-center gap-1">
+                              <Receipt size={11} /> Vente {dl.saleReference}
+                            </p>
+                          )}
                           {(dl.driverName || dl.driverPlate) && (
                             <p className="text-[11px] font-semibold text-gold-dark flex items-center gap-1">
                               <Truck size={11} /> {dl.driverName || 'Chauffeur'}
@@ -1227,6 +1402,27 @@ export default function CommandsPage() {
                           ))}
                         </div>
                       )}
+                      {/* La livraison vaut vente : facturation et encaissement du bon */}
+                      <div className="mt-2.5 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <Tile label="Total H.T" value={formatCurrency(dl.totalHt ?? 0)} />
+                        <Tile
+                          label={dl.tvaEnabled ? `TVA ${dl.tvaRate}%` : 'TVA (désactivée)'}
+                          value={formatCurrency(dl.tvaAmount ?? 0)}
+                          color={dl.tvaEnabled ? 'text-gold-dark' : 'text-text-muted'}
+                        />
+                        <Tile label="Versé" value={formatCurrency(dl.paidAmount ?? 0)} color="text-pistachio" />
+                        <Tile
+                          label="Reste (dette)"
+                          value={formatCurrency(dl.restAmount ?? 0)}
+                          color={(dl.restAmount ?? 0) > 0 ? 'text-rose-deep' : 'text-pistachio'}
+                        />
+                      </div>
+                      {(dl.advanceApplied ?? 0) > 0 && (
+                        <p className="text-[10px] text-text-muted mt-1.5">
+                          Dont {formatCurrency(dl.advanceApplied ?? 0)} imputés sur l'acompte de la commande
+                          (déjà encaissés, pas de nouvelle écriture de caisse).
+                        </p>
+                      )}
                       {dl.notes && <p className="text-[11px] text-text-muted italic mt-2">« {dl.notes} »</p>}
                     </div>
                   ))}
@@ -1242,6 +1438,9 @@ export default function CommandsPage() {
         open={!!deliverCmd}
         command={deliverCmd}
         editing={editingDelivery}
+        advanceAvailable={
+          advanceAvailableOf(deliverCmd) + (editingDelivery?.advanceApplied ?? 0)
+        }
         onClose={() => { setDeliverCmd(null); setEditingDelivery(null); }}
         onSave={handleSaveDelivery}
       />
@@ -1286,7 +1485,7 @@ export default function CommandsPage() {
           if (deleteDeliveryId) void deleteDelivery(deleteDeliveryId).then(() => toast.success('Livraison supprimée'));
         }}
         title="Supprimer la livraison"
-        message="Les quantités livrées seront recalculées et la commande repassera éventuellement en « non livrée »."
+        message="La facture de vente générée par ce bon sera supprimée elle aussi, les matières reviendront en stock, l'encaissement sera retiré de la caisse et la commande repassera éventuellement en « non livrée »."
       />
 
       {/* ================= Print prompt ================= */}

@@ -106,6 +106,21 @@ interface SalesState {
   deleteSale: (id: string) => Promise<void>;
 }
 
+/**
+ * Une facture issue d'un bon de livraison et son bon sont la MEME operation :
+ * modifier, regler ou supprimer l'une met l'autre a jour cote base. On
+ * recharge donc les commandes et leurs bons.
+ * L'import est dynamique : `commandStore` importe deja `salesStore`.
+ */
+async function refreshDeliveries(): Promise<void> {
+  try {
+    const { useCommandStore } = await import('./commandStore');
+    await useCommandStore.getState().load();
+  } catch {
+    /* la liste sera rechargee au prochain passage sur l'ecran Commandes */
+  }
+}
+
 /** True when the database has not received the POS/production update yet. */
 function isMissingFunction(message: string): boolean {
   return /PGRST202|Could not find the function|does not exist|schema cache/i.test(message);
@@ -435,6 +450,7 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
   },
 
   updateSale: async (id, data) => {
+    const wasDelivery = !!get().sales.find((s) => s.id === id)?.deliveryId;
     await save('sales.update', () =>
       rpc.updateSale(id, {
         date: data.date ?? null,
@@ -444,15 +460,22 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
       })
     );
     set({ sales: await db.sales.list() });
+    if (wasDelivery) await refreshDeliveries();
   },
 
   payDebt: async (saleId, amount, date) => {
+    const wasDelivery = !!get().sales.find((s) => s.id === saleId)?.deliveryId;
     await save('sales.payDebt', () => rpc.paySaleDebt(saleId, amount, date));
     set({ sales: await db.sales.list() });
+    if (wasDelivery) await refreshDeliveries();
   },
 
   deleteSale: async (id) => {
+    const wasDelivery = !!get().sales.find((s) => s.id === id)?.deliveryId;
     await save('sales.delete', () => db.sales.remove(id));
     set({ sales: get().sales.filter((s) => s.id !== id) });
+    // Supprimer la facture d'une livraison supprime le bon : les matieres
+    // reviennent en stock et la commande repasse en « non livree ».
+    if (wasDelivery) await Promise.all([refreshDeliveries(), useStockStore.getState().load()]);
   },
 }));

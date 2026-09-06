@@ -108,9 +108,36 @@ export default function SettingsPage() {
             <Input label="NIS" value={form.nis} onChange={(e) => set('nis', e.target.value)} />
             <Input label="Article" value={form.article} onChange={(e) => set('article', e.target.value)} />
             <Input label="RC" value={form.rc} onChange={(e) => set('rc', e.target.value)} />
+            <Input
+              label="Lieu d'activité"
+              value={form.activityPlace || ''}
+              onChange={(e) => set('activityPlace', e.target.value)}
+              placeholder="Ex : BAHLI BLIDA"
+            />
+            <Input
+              label="Ville (mention « … LE jj/mm/aaaa »)"
+              value={form.city || ''}
+              onChange={(e) => set('city', e.target.value)}
+              placeholder="Ex : BLIDA"
+            />
           </div>
-          <Textarea label={t('description')} value={form.description} onChange={(e) => set('description', e.target.value)} className="mt-4" />
-          <Textarea label={t('address')} value={form.address} onChange={(e) => set('address', e.target.value)} className="mt-4" />
+          <p className="mt-3 rounded-xl border border-gold/25 bg-gold/8 px-3.5 py-2 text-xs font-medium text-gold-dark">
+            Ces informations composent l'en-tête de TOUS les documents imprimés : raison sociale,
+            activité (champ « Description »), lieu d'activité, siège social (champ « Adresse ») et
+            téléphone, puis la mention « VILLE LE date » en haut à droite.
+          </p>
+          <Textarea
+            label={`${t('description')} — activité imprimée sous la raison sociale`}
+            value={form.description}
+            onChange={(e) => set('description', e.target.value)}
+            className="mt-4"
+          />
+          <Textarea
+            label={`${t('address')} — siège social imprimé sur les documents`}
+            value={form.address}
+            onChange={(e) => set('address', e.target.value)}
+            className="mt-4"
+          />
           <div className="flex justify-end mt-4"><Button variant="gold" onClick={saveStore}><Save size={16} /> {t('save')}</Button></div>
         </Card>
       )}

@@ -21,6 +21,8 @@ const defaultSettings: StoreSettings = {
   nis: '',
   article: '',
   rc: '',
+  activityPlace: '',
+  city: '',
 };
 
 export const useSettingsStore = create<SettingsState>()((set, get) => ({
