@@ -449,11 +449,16 @@ begin
 
   -- ---- lignes de la facture = produits remis -------------------------------
   --  Aucune consommation de stock : elle a deja eu lieu a la livraison.
+  --
+  --  `fiche_technic_id` n'est recopie QUE si la fiche existe encore : une
+  --  commande peut porter la reference d'une fiche technique supprimee depuis,
+  --  et `sale_lines.fiche_technic_id` est contraint par une cle etrangere.
   delete from public.sale_lines where sale_id = v_sale.id;
   insert into public.sale_lines (sale_id, product_id, comptoir_id, fiche_technic_id,
                                  product_name, quantity, selling_price, base_price,
                                  sell_by_unit, unit)
-  select v_sale.id, null, null, px.fiche_technic_id,
+  select v_sale.id, null, null,
+         (select ft.id from public.fiche_technics ft where ft.id = px.fiche_technic_id),
          di.product_name, di.quantity, coalesce(px.unit_price, 0), coalesce(px.unit_price, 0),
          coalesce(px.sell_by_unit, false), coalesce(di.sell_unit, px.sell_unit)
     from public.command_delivery_items di
@@ -1184,6 +1189,13 @@ commit;
 --           (select count(*) from public.caisse_transactions t
 --             where t.ref_table = 'sale_payments' and t.ref_id = p.id) as ecritures
 --      from public.sale_payments p order by p.created_at desc limit 20;
+--
+--    -- lignes de commande pointant une fiche technique supprimee : la vente
+--    -- generee les facture par leur libelle, sans rattachement de recette
+--    select ci.id, ci.product_name, ci.fiche_technic_id
+--      from public.command_items ci
+--     where ci.fiche_technic_id is not null
+--       and not exists (select 1 from public.fiche_technics ft where ft.id = ci.fiche_technic_id);
 --
 --    -- TVA et reglements des commandes :
 --    select reference, total_amount, tva_enabled, tva_rate, tva_amount,
