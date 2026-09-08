@@ -99,18 +99,21 @@ const css = `
 
   .page { max-width: 920px; margin: 0 auto; background: #fff; border: 1.6px solid #000; padding: 12px 14px 16px; }
 
-  /* En-tête officiel : infos à GAUCHE · raison sociale au MILIEU · logo à DROITE */
+  /* En-tête officiel : infos à GAUCHE · raison sociale au MILIEU · logo à DROITE.
+     Colonnes latérales de MÊME largeur : la raison sociale est vraiment
+     centrée et le logo reste collé au bord droit. */
   .head { border: 1.6px solid #000; padding: 10px 12px 8px; }
-  .head .row { display: flex; align-items: center; gap: 12px; }
+  .head .row { display: flex; align-items: center; gap: 10px; }
   .head .info {
-    flex: 0 0 30%; font-size: 12.5px; font-weight: 700; line-height: 1.55;
-    text-transform: uppercase; word-break: break-word;
+    flex: 0 0 27%; max-width: 27%; text-align: left;
+    font-size: 12px; font-weight: 700; line-height: 1.5;
+    text-transform: uppercase; overflow-wrap: anywhere;
   }
-  .head .center { flex: 1 1 auto; text-align: center; }
-  .head .logo-box { flex: 0 0 auto; width: 100px; text-align: right; }
-  .head .logo { width: 96px; height: 96px; object-fit: contain; }
-  .head .brand { font-size: 30px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; text-decoration: underline; text-underline-offset: 4px; }
-  .head .activity { font-size: 19px; font-weight: 700; margin-top: 5px; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; }
+  .head .center { flex: 1 1 auto; min-width: 0; text-align: center; }
+  .head .logo-box { flex: 0 0 27%; max-width: 27%; text-align: right; }
+  .head .logo { width: 112px; height: 112px; object-fit: contain; display: inline-block; }
+  .head .brand { font-size: 27px; font-weight: 700; letter-spacing: .4px; line-height: 1.15; text-transform: uppercase; text-decoration: underline; text-underline-offset: 4px; }
+  .head .activity { font-size: 17px; font-weight: 700; margin-top: 6px; line-height: 1.2; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; }
   .head .city { text-align: right; font-size: 15px; font-weight: 700; font-style: italic; margin-top: 8px; text-transform: uppercase; }
 
   .doc-title { text-align: center; font-size: 23px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; margin: 14px 0 4px; text-decoration: underline; text-underline-offset: 4px; }
