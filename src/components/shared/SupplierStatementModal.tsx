@@ -132,213 +132,66 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
     ? `Du ${formatDate(period.from, language)} au ${formatDate(period.to, language)}`
     : '';
 
+  /**
+   * COMPTE RENDU FOURNISSEUR — document volontairement DÉPOUILLÉ : la
+   * marchandise reçue avec sa QUANTITÉ, son PRIX UNITAIRE et son MONTANT, puis
+   * TOTAL H.T, T.V.A, TOTAL T.T.C, VERSEMENT et LE REST. Le détail facture par
+   * facture reste consultable à l'écran mais n'est plus imprimé.
+   */
   const doPrint = () => {
     if (!supplier || !data || !period) return;
 
-    const purchasesSection: PrintTableSection = {
-      title: 'Factures d’achat de la période',
-      icon: '🧾',
-      headerTotal: formatCurrency(data.total),
+    // Une ligne par produit ET par prix d'achat pratiqué sur la période.
+    const grouped = new Map<
+      string,
+      { name: string; unit?: string; quantity: number; unitPrice: number; amount: number }
+    >();
+    data.purchasesList.forEach((p) =>
+      p.products.forEach((l) => {
+        if (!(l.quantity > 0)) return;
+        const name = (l.productName || '—').trim();
+        const key = `${name.toLowerCase()}|${l.unit ?? ''}|${l.purchasePrice}`;
+        const cur = grouped.get(key) ?? {
+          name, unit: l.unit, quantity: 0, unitPrice: l.purchasePrice, amount: 0,
+        };
+        cur.quantity += l.quantity;
+        cur.amount += l.quantity * l.purchasePrice;
+        grouped.set(key, cur);
+      })
+    );
+    const lines = [...grouped.values()].sort((a, b) => b.amount - a.amount);
+
+    const ht = lines.reduce((s, l) => s + l.amount, 0);
+    // Les factures d'achat sont saisies hors taxes : pas de TVA récupérable.
+    const tva = 0;
+    const ttc = ht + tva;
+    const paid = data.paid + data.settled;
+    const rest = data.outstanding;
+
+    const section: PrintTableSection = {
+      title: 'Marchandises reçues sur la période',
       cols: [
-        { label: 'N° facture' }, { label: 'Date' }, { label: 'Bon n°' }, { label: 'Matricule' },
-        { label: 'Total', align: 'right' }, { label: 'Payé', align: 'right' }, { label: 'Reste', align: 'right' },
+        { label: 'Désignation' },
+        { label: 'Quantité', align: 'right' },
+        { label: 'Prix unitaire', align: 'right' },
+        { label: 'Total', align: 'right' },
       ],
       rows: [
-        ...data.purchasesList.map<PrintRow>((p) => ({
+        ...lines.map<PrintRow>((l) => ({
           cells: [
-            `${p.reference}${p.isHistorical ? ' (ancien achat)' : ''}`,
-            formatDate(p.date, language), p.bonNumber || '—', p.driverPlate || '—',
-            formatCurrency(p.totalAmount), formatCurrency(p.paidAmount), formatCurrency(p.restAmount),
-          ],
-          tone: p.restAmount > 0 ? 'neg' : 'pos',
-        })),
-        ...(data.purchasesList.length
-          ? [{
-              cells: ['TOTAL ACHATS', '', '', '', formatCurrency(data.total),
-                formatCurrency(data.paid), formatCurrency(data.rest)],
-              variant: 'total' as const,
-            }]
-          : []),
-      ],
-      emptyLabel: 'Aucune facture sur la période',
-    };
-
-    const detailSection: PrintTableSection = {
-      title: 'Détail des marchandises reçues',
-      icon: '📦',
-      headerTotal: formatCurrency(data.total),
-      cols: [
-        { label: 'Facture / Produit' }, { label: 'Quantité', align: 'right' },
-        { label: 'Prix d’achat', align: 'right' }, { label: 'Montant', align: 'right' },
-      ],
-      rows: data.purchasesList.flatMap<PrintRow>((p) => [
-        {
-          cells: [
-            `${p.reference} — ${formatDate(p.date, language)}${p.bonNumber ? ` · Bon ${p.bonNumber}` : ''}`,
-            formatCurrency(p.totalAmount),
-          ],
-          variant: 'category', span: true, tone: 'accent',
-        },
-        ...p.products.map<PrintRow>((l) => ({
-          cells: [
-            l.productName || '—',
+            l.name.toUpperCase(),
             `${qty(l.quantity)}${l.unit ? ` ${l.unit}` : ''}`,
-            formatCurrency(l.purchasePrice),
-            formatCurrency(l.quantity * l.purchasePrice),
+            formatCurrency(l.unitPrice),
+            formatCurrency(l.amount),
           ],
-          variant: 'detail',
         })),
-      ]),
+        { cells: ['TOTAL H.T', '', '', formatCurrency(ht)], variant: 'subtotal' },
+        { cells: ['T.V.A', '', '', formatCurrency(tva)], variant: 'subtotal' },
+        { cells: ['TOTAL T.T.C', '', '', formatCurrency(ttc)], variant: 'total' },
+        { cells: ['VERSEMENT', '', '', formatCurrency(paid)], variant: 'subtotal' },
+        { cells: ['LE REST', '', '', formatCurrency(rest)], variant: 'total' },
+      ],
       emptyLabel: 'Aucune marchandise reçue sur la période',
-    };
-
-    // Le récapitulatif attendu : COMBIEN de chaque produit sur la période.
-    const quantitiesSection: PrintTableSection = {
-      title: 'Quantités reçues par produit',
-      icon: '🏗️',
-      note: 'Cumul de toutes les factures de la période, produit par produit.',
-      headerTotal: formatCurrency(data.productsAmount),
-      cols: [
-        { label: 'Produit' }, { label: 'Quantité totale', align: 'right' },
-        { label: 'Unité', align: 'center' }, { label: 'Factures', align: 'right' },
-        { label: 'Prix moyen', align: 'right' }, { label: 'Montant', align: 'right' },
-      ],
-      rows: [
-        ...data.products.map<PrintRow>((x) => ({
-          cells: [
-            x.name,
-            qty(x.quantity),
-            x.unit || '—',
-            String(x.invoiceCount),
-            formatCurrency(x.avgPrice),
-            formatCurrency(x.amount),
-          ],
-          tone: 'accent',
-        })),
-        ...(data.products.length
-          ? [{
-              cells: [
-                'TOTAL', qty(data.productsQty), '', String(data.purchasesList.length), '',
-                formatCurrency(data.productsAmount),
-              ],
-              variant: 'total' as const,
-            }]
-          : []),
-      ],
-      emptyLabel: 'Aucun produit reçu sur la période',
-    };
-
-    // ---- Anciennes dettes reprises du passe -------------------------------
-    const oldDebtsSection: PrintTableSection = {
-      title: 'Anciennes dettes de la période',
-      icon: '🗂️',
-      note:
-        'Sommes dues au fournisseur avant l\u2019utilisation du logiciel. Aucune écriture de '
-        + 'caisse n\u2019est générée à leur saisie : seul leur règlement en génère une.',
-      headerTotal: formatCurrency(data.oldDebtsTotal),
-      cols: [
-        { label: 'Date' }, { label: 'Description' },
-        { label: 'Montant', align: 'right' }, { label: 'Réglé', align: 'right' },
-        { label: 'Reste', align: 'right' },
-      ],
-      rows: [
-        ...data.oldDebtsList.map<PrintRow>((d) => ({
-          cells: [
-            formatDate(d.date, language),
-            d.description || '—',
-            formatCurrency(d.amount), formatCurrency(d.paidAmount), formatCurrency(d.restAmount),
-          ],
-          tone: d.restAmount > 0 ? 'neg' : 'pos',
-        })),
-        ...(data.oldDebtsList.length
-          ? [{
-              cells: ['TOTAL ANCIENNES DETTES', '', formatCurrency(data.oldDebtsTotal),
-                formatCurrency(data.oldDebtsPaid), formatCurrency(data.oldDebtsRest)],
-              variant: 'total' as const,
-            }]
-          : []),
-      ],
-      emptyLabel: 'Aucune ancienne dette sur la période',
-    };
-
-    // ---- Trop-verses recuperes (entree de caisse) -------------------------
-    const refundsSection: PrintTableSection = {
-      title: 'Excédents récupérés du fournisseur',
-      icon: '↩️',
-      note: 'Argent rendu par le fournisseur parce qu\u2019il avait été payé en trop — entrée de caisse.',
-      headerTotal: formatCurrency(data.refunded),
-      cols: [
-        { label: 'Date et heure' }, { label: 'Reçu n°' }, { label: 'Mode de règlement' },
-        { label: 'Note' }, { label: 'Montant récupéré', align: 'right' },
-      ],
-      rows: [
-        ...data.refundsList.map<PrintRow>((r) => ({
-          cells: [
-            formatDateTime(r.refundedAt, language),
-            `EXC-${r.id.slice(0, 8).toUpperCase()}`,
-            paymentMethodLabel(r),
-            r.notes || '—',
-            formatCurrency(r.amount),
-          ],
-          tone: 'pos',
-        })),
-        ...(data.refundsList.length
-          ? [{ cells: ['TOTAL RÉCUPÉRÉ', '', '', '', formatCurrency(data.refunded)], variant: 'total' as const }]
-          : []),
-      ],
-      emptyLabel: 'Aucun excédent récupéré sur la période',
-    };
-
-    // ---- Situation du compte : dette OU trop-verse en notre faveur --------
-    const accountSection: PrintTableSection = {
-      title: 'Situation du compte fournisseur',
-      icon: '⚖️',
-      note: data.account.hasCredit
-        ? 'Le fournisseur a été payé PLUS que dû : le solde est en faveur de l\u2019entreprise.'
-        : 'Solde arrêté à ce jour, anciennes dettes et trop-versés compris.',
-      cols: [{ label: 'Libellé' }, { label: 'Montant', align: 'right' }],
-      rows: [
-        { cells: ['Total dû (factures + anciennes dettes)', formatCurrency(data.account.billed)], tone: 'accent' },
-        { cells: ['Total payé', formatCurrency(data.account.paid)], tone: 'pos' },
-        { cells: ['Reste à payer', formatCurrency(data.account.rest)], tone: data.account.rest > 0 ? 'neg' : 'pos' },
-        { cells: ['Trop-versé au fournisseur', formatCurrency(data.account.credit)], tone: 'pos' },
-        {
-          cells: [
-            data.account.hasCredit ? 'SOLDE EN FAVEUR DE L\u2019ENTREPRISE (à récupérer)' : 'SOLDE DÛ AU FOURNISSEUR',
-            data.account.hasCredit
-              ? `+ ${formatCurrency(data.account.creditToReturn)}`
-              : formatCurrency(Math.max(0, data.account.net)),
-          ],
-          variant: 'total',
-          tone: data.account.hasCredit ? 'pos' : 'neg',
-        },
-      ],
-    };
-
-    const paymentsSection: PrintTableSection = {
-      title: 'Versements effectués au fournisseur',
-      icon: '💰',
-      headerTotal: formatCurrency(data.settled),
-      cols: [
-        { label: 'Date et heure' }, { label: 'Reçu n°' }, { label: 'Mode de règlement' },
-        { label: 'Note' }, { label: 'Montant', align: 'right' },
-      ],
-      rows: [
-        ...data.paymentsList.map<PrintRow>((p) => ({
-          cells: [
-            formatDateTime(p.paidAt, language),
-            `RGF-${p.id.slice(0, 8).toUpperCase()}`,
-            paymentMethodLabel(p),
-            p.notes || '—',
-            formatCurrency(p.amount),
-          ],
-          tone: 'pos',
-        })),
-        ...(data.paymentsList.length
-          ? [{ cells: ['TOTAL VERSEMENTS', '', '', '', formatCurrency(data.settled)], variant: 'total' as const }]
-          : []),
-      ],
-      emptyLabel: 'Aucun versement sur la période',
     };
 
     printDetailedReport(
@@ -346,31 +199,8 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
         docTitle: `Compte rendu ${supplier.name}`,
         headTitle: 'COMPTE RENDU FOURNISSEUR',
         subtitle: periodLabel,
-        meta: [
-          { label: 'Fournisseur', value: supplier.name },
-          { label: 'Téléphone', value: supplier.phone || '—' },
-          { label: 'Adresse', value: supplier.address || '—' },
-          { label: 'Période', value: periodLabel },
-        ],
-        kpis: [
-          { label: 'Total acheté', value: formatCurrency(data.total), tone: 'accent' },
-          { label: 'Payé sur factures', value: formatCurrency(data.paid), tone: 'pos' },
-          { label: 'Reste dû (période)', value: formatCurrency(data.outstanding), tone: 'neg' },
-          { label: 'Versements effectués', value: formatCurrency(data.settled), tone: 'pos' },
-          { label: 'Anciennes dettes', value: formatCurrency(data.oldDebtsTotal), tone: 'muted' },
-          { label: 'Excédent récupéré', value: formatCurrency(data.refunded), tone: 'pos' },
-          {
-            label: data.account.hasCredit ? 'SOLDE EN NOTRE FAVEUR' : 'Solde dû au fournisseur',
-            value: data.account.hasCredit
-              ? `+ ${formatCurrency(data.account.creditToReturn)}`
-              : formatCurrency(Math.max(0, data.account.net)),
-            tone: data.account.hasCredit ? 'pos' : 'neg',
-          },
-        ],
-        sections: [
-          accountSection, purchasesSection, detailSection, quantitiesSection,
-          oldDebtsSection, paymentsSection, refundsSection,
-        ],
+        meta: [{ label: 'Fournisseur', value: supplier.name }],
+        sections: [section],
       },
       settings,
       language

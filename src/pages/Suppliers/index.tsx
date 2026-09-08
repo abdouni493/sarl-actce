@@ -18,7 +18,7 @@ import { StatCard } from '@/components/shared/StatCard';
 import { SupplierForm } from '@/components/shared/SupplierForm';
 import { VersementModal } from '@/components/shared/VersementModal';
 import { EditPaymentModal } from '@/components/shared/EditPaymentModal';
-import { EditPurchaseModal } from '@/components/shared/EditPurchaseModal';
+import { CreatePurchase } from '@/pages/Purchase/CreatePurchase';
 import { SupplierStatementModal } from '@/components/shared/SupplierStatementModal';
 import { OldDebtModal } from '@/components/shared/OldDebtModal';
 import { RefundCreditModal } from '@/components/shared/RefundCreditModal';
@@ -45,7 +45,7 @@ export default function SuppliersPage() {
     addSupplier, updateSupplier, deleteSupplier, payDebt, updatePayment, deletePayment,
     addOldDebt, updateOldDebt, deleteOldDebt, refundCredit, deleteRefund,
   } = useSupplierStore();
-  const { purchases, updatePurchase, deletePurchase } = usePurchaseStore();
+  const { purchases, deletePurchase } = usePurchaseStore();
   const settings = useSettingsStore((s) => s.settings);
 
   const [search, setSearch] = useState('');
@@ -795,17 +795,17 @@ export default function SuppliersPage() {
         )}
       </Modal>
 
-      {/* ---- Edit a purchase invoice ---- */}
-      <EditPurchaseModal
-        purchase={editPurchase}
+      {/* ---- Edit a purchase invoice — MÊME formulaire que la création ---- */}
+      <Modal
+        open={!!editPurchase}
         onClose={() => setEditPurchase(null)}
-        onSave={async (data) => {
-          if (!editPurchase) return;
-          await updatePurchase(editPurchase.id, data);
-          toast.success('Facture modifiée');
-          setEditPurchase(null);
-        }}
-      />
+        title={`Modifier la facture ${editPurchase?.reference ?? ''}`}
+        size="lg"
+      >
+        {editPurchase && (
+          <CreatePurchase editing={editPurchase} onClose={() => setEditPurchase(null)} />
+        )}
+      </Modal>
 
       {/* ---- Ancienne dette (somme deja due avant le logiciel) ---- */}
       {oldDebtFor && (

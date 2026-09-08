@@ -13,13 +13,15 @@ import {
  *  fournisseur, fiche de production et reçu d'heures supplémentaires.
  *
  *  Tous partagent EXACTEMENT le même papier à en-tête (`printOfficialDocument`,
- *  cf. `officialDoc.ts`) : raison sociale soulignée, activité, lieu d'activité,
- *  siège social et téléphone, mention « <VILLE> LE jj/mm/aaaa », titre du
- *  document souligné, bloc « DOIT », tableau encadré, totaux collés au pied du
- *  tableau, versements en bas à gauche et signature en bas à droite.
+ *  cf. `officialDoc.ts`) : coordonnées et identifiants fiscaux à GAUCHE, raison
+ *  sociale + activité au MILIEU, logo à DROITE, mention « <VILLE> LE
+ *  jj/mm/aaaa », titre du document souligné, bloc « DOIT », tableau encadré,
+ *  totaux collés au pied du tableau et signature en bas à droite.
  *
  *  Seules changent les colonnes et le bloc de totaux, selon le contenu propre à
- *  chaque document.
+ *  chaque document. Le BON DE LIVRAISON est le plus dépouillé de tous : il ne
+ *  porte que la quantité, le prix unitaire, le montant, la TVA, le versement
+ *  et le reste.
  * ========================================================================== */
 
 /** Identifiants fiscaux d'un client — imprimés dans le bloc « DOIT ». */
@@ -227,15 +229,13 @@ export interface DeliveryNoteData {
 }
 
 /**
- * BON DE LIVRAISON — modèle officiel de l'entreprise.
- * La livraison vaut VENTE : le bon porte donc la valeur de la marchandise
- * remise, la TVA quand elle est activée, le versement du client et le reste dû.
+ * BON DE LIVRAISON — modèle officiel de l'entreprise, volontairement DÉPOUILLÉ.
+ * Le bon ne porte plus que ce que le client doit lire : la marchandise remise
+ * avec sa QUANTITÉ, son PRIX UNITAIRE et son MONTANT, puis la TVA, le
+ * VERSEMENT et LE REST. Tout le reste (quantités commandées, reste à livrer,
+ * situation de la commande, chauffeur, lieu, mentions…) a été retiré.
  */
 export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) {
-  const totalOrdered = data.lines.reduce((s, l) => s + l.ordered, 0);
-  const totalNow = data.lines.reduce((s, l) => s + l.deliveredNow, 0);
-  const totalAll = data.lines.reduce((s, l) => s + l.deliveredTotal, 0);
-  const totalRemaining = data.lines.reduce((s, l) => s + Math.max(0, l.ordered - l.deliveredTotal), 0);
   const ht = data.deliveryTotalHt ?? data.lines.reduce((s, l) => s + l.deliveredNow * l.unitPrice, 0);
   const tvaAmount = data.tvaEnabled
     ? data.tvaAmount ?? Math.round(ht * (data.tvaRate ?? 19)) / 100
@@ -243,67 +243,29 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
   const ttc = data.deliveryTotalTtc ?? ht + tvaAmount;
   const paid = data.deliveryPaid ?? 0;
   const rest = data.deliveryRest ?? Math.max(0, ttc - paid);
-  const isFull = totalOrdered > 0 && totalRemaining <= 0.0001;
-  const percent = totalOrdered > 0 ? Math.min(100, (totalAll / totalOrdered) * 100) : 0;
 
-  const rows: DocRow[] = data.lines.map((l) => {
-    const left = Math.max(0, l.ordered - l.deliveredTotal);
-    return {
-      cells: [
-        formatDate(data.deliveredAt),
-        l.productName.toUpperCase(),
-        dosage(l.unit),
-        qty(l.ordered),
-        qty(l.deliveredNow),
-        left > 0 ? qty(left) : 'COMPLET',
-        formatCurrency(l.unitPrice),
-        formatCurrency(l.deliveredNow * l.unitPrice),
-      ],
-    };
-  });
-
-  const versements: string[] = [];
-  if (data.advanceApplied && data.advanceApplied > 0) {
-    versements.push(
-      `ACOMPTE COMMANDE ${data.commandReference} IMPUTÉ : ${formatCurrency(data.advanceApplied)}`
-    );
-  }
-  if (data.cashPaid && data.cashPaid > 0) {
-    versements.push(versementLine(data.cashPaid, data.deliveredAt));
-  }
-  if (!versements.length && paid > 0) versements.push(versementLine(paid, data.deliveredAt));
-  if (rest > 0) versements.push(`LE REST : ${formatCurrency(rest)}`);
+  const rows: DocRow[] = data.lines.map((l) => ({
+    cells: [
+      l.productName.toUpperCase(),
+      qty(l.deliveredNow),
+      formatCurrency(l.unitPrice),
+      formatCurrency(l.deliveredNow * l.unitPrice),
+    ],
+  }));
 
   printOfficialDocument(
     {
       title: data.historical ? 'ANCIENNE LIVRAISON' : 'BON DE LIVRAISON',
       docDate: data.deliveredAt,
       doitName: data.clientName,
-      doitLines: fiscalLines({
-        name: data.clientName, phone: data.clientPhone, address: data.clientAddress,
-        rc: data.clientRc, nif: data.clientNif, nis: data.clientNis, article: data.clientArticle,
-      }),
-      metaLines: [
-        `N° ${data.reference}`,
-        `COMMANDE : ${data.commandReference}`,
-        data.bonNumber ? `N° BON : ${data.bonNumber}` : '',
-        data.saleReference ? `FACTURE : ${data.saleReference}` : '',
-        `LIVRÉ LE : ${formatDateTime(data.deliveredAt)}`,
-        `LIEU : ${(data.location || data.clientAddress || '—').toUpperCase()}`,
-        data.driverName ? `CHAUFFEUR : ${data.driverName}` : '',
-        data.driverPlate ? `MATRICULE : ${data.driverPlate}` : '',
-      ].filter(Boolean),
+      metaLines: [`N° ${data.reference}`],
       tables: [
         {
           columns: [
-            { label: 'Date', align: 'center', width: '10%' },
             { label: 'Désignation', align: 'left' },
-            { label: 'Dosage', align: 'center', width: '8%' },
-            { label: 'Qté commandée', align: 'center', width: '10%' },
-            { label: 'Quantité', align: 'center', width: '10%' },
-            { label: 'Reste à livrer', align: 'center', width: '10%' },
-            { label: 'Prix unitaire', align: 'right', width: '13%' },
-            { label: 'Total', align: 'right', width: '15%' },
+            { label: 'Quantité', align: 'center', width: '16%' },
+            { label: 'Prix unitaire', align: 'right', width: '20%' },
+            { label: 'Total', align: 'right', width: '22%' },
           ],
           rows,
           totals: totalsBlock({
@@ -312,36 +274,6 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
           }),
           emptyLabel: 'Aucune quantité livrée sur ce bon',
         },
-        {
-          title: 'Situation de la commande',
-          columns: [
-            { label: 'Désignation', align: 'left' },
-            { label: 'Montant', align: 'right', width: '28%' },
-          ],
-          rows: [
-            { cells: ['Total de la commande', formatCurrency(data.totalAmount)] },
-            { cells: ['Total versé sur la commande', formatCurrency(data.paidAmount)] },
-            { cells: ['Reste dû sur la commande', formatCurrency(data.restAmount)], variant: 'subtotal' },
-            { cells: ['Quantité commandée', qty(totalOrdered)] },
-            { cells: ['Quantité livrée à ce jour', qty(totalAll)] },
-            { cells: ['Reste à livrer', qty(totalRemaining)], variant: 'subtotal' },
-          ],
-        },
-      ],
-      amountInWords: amountInWords(ttc),
-      observations: data.notes,
-      stamps: [
-        isFull
-          ? { label: 'Commande entièrement livrée', tone: 'ok' as const }
-          : { label: `Livraison partielle — ${percent.toFixed(0)} %`, tone: 'warn' as const },
-        ...(data.historical ? [{ label: 'Ancienne livraison', tone: 'warn' as const }] : []),
-        rest > 0
-          ? { label: 'Livraison à crédit', tone: 'warn' as const }
-          : { label: 'Livraison réglée', tone: 'ok' as const },
-      ],
-      footNotes: [
-        ...versements,
-        'LE CLIENT RECONNAÎT AVOIR REÇU LES MARCHANDISES CI-DESSUS EN BON ÉTAT.',
       ],
       signatures: ['Le client', 'Signature'],
       fileName: `Bon_de_Livraison_${data.reference}`,
@@ -378,10 +310,9 @@ export interface DeliveryPeriodReportData {
 }
 
 /**
- * BON DE LIVRAISON SUR UNE PÉRIODE — c'est le document manuscrit reproduit à
- * l'identique : une ligne par remise (DATE · DESIGNATION · DOSAGE · QUANTITE ·
- * PRIX UNITAIRE · TOTAL), TOTAL HT / VERSEMENT / LE REST au pied du tableau et
- * le détail des versements en bas à gauche.
+ * BON DE LIVRAISON SUR UNE PÉRIODE — même document dépouillé que le bon
+ * unitaire : une ligne par remise (DESIGNATION · QUANTITE · PRIX UNITAIRE ·
+ * TOTAL) puis TOTAL H.T / T.V.A / TOTAL T.T.C / VERSEMENT / LE REST.
  */
 export function printDeliveryPeriodReport(data: DeliveryPeriodReportData, store: StoreSettings) {
   const ht = data.lines.reduce((s, l) => s + l.amount, 0);
@@ -391,49 +322,37 @@ export function printDeliveryPeriodReport(data: DeliveryPeriodReportData, store:
   const paid = data.paidAmount ?? 0;
   const rest = data.restAmount ?? Math.max(0, ttc - paid);
 
-  let prevDate = '';
-  const rows: DocRow[] = data.lines.map((l) => {
-    const showDate = l.date !== prevDate;
-    prevDate = l.date;
-    return {
-      cells: [
-        showDate ? formatDate(l.date) : '',
-        l.designation.toUpperCase(),
-        dosage(l.unit),
-        qty(l.quantity),
-        formatCurrency(l.unitPrice),
-        formatCurrency(l.amount),
-      ],
-    };
-  });
+  const rows: DocRow[] = data.lines.map((l) => ({
+    cells: [
+      l.designation.toUpperCase(),
+      qty(l.quantity),
+      formatCurrency(l.unitPrice),
+      formatCurrency(l.amount),
+    ],
+  }));
 
   printOfficialDocument(
     {
       title: 'BON DE LIVRAISON',
       docDate: data.to,
       doitName: data.client.name,
-      doitLines: fiscalLines(data.client),
       metaLines: [`LIVRAISON DU ${formatDate(data.from)} AU ${formatDate(data.to)}`],
       tables: [
         {
           columns: [
-            { label: 'Date', align: 'center', width: '13%' },
             { label: 'Désignation', align: 'left' },
-            { label: 'Dosage', align: 'center', width: '10%' },
-            { label: 'Quantité', align: 'center', width: '12%' },
-            { label: 'Prix unitaire', align: 'right', width: '16%' },
-            { label: 'Total', align: 'right', width: '18%' },
+            { label: 'Quantité', align: 'center', width: '16%' },
+            { label: 'Prix unitaire', align: 'right', width: '20%' },
+            { label: 'Total', align: 'right', width: '22%' },
           ],
           rows,
           totals: totalsBlock({
             ht, tvaEnabled: data.applyTva, tvaRate: rate, tvaAmount: tva, ttc,
-            paid, rest, showPayment: (data.versements?.length ?? 0) > 0 || paid > 0 || rest > 0,
+            paid, rest, showPayment: true,
           }),
           emptyLabel: 'Aucune livraison sur la période',
         },
       ],
-      amountInWords: amountInWords(ttc),
-      footNotes: (data.versements ?? []).map((v) => versementLine(v.amount, v.date)),
       signatures: ['Signature'],
       fileName: `Livraisons_${data.client.name.replace(/\s+/g, '_')}`,
     },

@@ -2,10 +2,11 @@
 //  FACTURE DE VENTE
 // ----------------------------------------------------------------------------
 //  Rendue sur le papier à en-tête officiel de l'entreprise (`officialDoc.ts`),
-//  identique au bon de livraison : raison sociale soulignée, activité, lieu
-//  d'activité, siège social + tél, « <VILLE> LE jj/mm/aaaa », bloc « DOIT »,
-//  tableau encadré des articles, TOTAL H.T / TVA / TOTAL T.T.C / VERSEMENT /
-//  LE REST, montant en lettres, versements en bas à gauche, signature à droite.
+//  identique au bon de livraison : coordonnées et identifiants fiscaux à
+//  GAUCHE, raison sociale + activité au MILIEU, logo à DROITE, mention
+//  « <VILLE> LE jj/mm/aaaa », bloc « DOIT », tableau encadré des articles,
+//  TOTAL H.T / TVA / TOTAL T.T.C / VERSEMENT / LE REST, montant en lettres,
+//  versements en bas à gauche, signature à droite.
 //
 //  La TVA n'apparaît que si elle a été activée sur la vente.
 //  Ce fichier exporte aussi `amountInWords()`, utilisé par tous les documents.

@@ -15,19 +15,28 @@ export type AddPurchaseInput = Omit<
   payments?: Purchase['payments'];
 };
 
+/**
+ * Modification d'une facture d'achat. Tout ce qui a été saisi à la création
+ * peut être corrigé : fournisseur, date, bon de livraison, matricule, lignes
+ * de marchandises et règlement. Les clés absentes gardent leur valeur — quand
+ * `products` est omis, les lignes et le stock ne sont pas touchés.
+ */
 export interface UpdatePurchaseInput {
+  supplierId?: string;
   date?: string;
   bonNumber?: string;
   driverPlate?: string;
+  isHistorical?: boolean;
   paidAmount?: number;
   note?: string;
+  products?: Purchase['products'];
 }
 
 interface PurchaseState {
   purchases: Purchase[];
   load: () => Promise<void>;
   addPurchase: (p: AddPurchaseInput) => Promise<Purchase>;
-  /** Edits the commercial header of an invoice (date, bon, matricule, paid). */
+  /** Edits an invoice — header AND lines; the stock follows the correction. */
   updatePurchase: (id: string, data: UpdatePurchaseInput) => Promise<void>;
   paySupplierDebt: (purchaseId: string, amount: number, date?: string) => Promise<void>;
   payDebt: (purchaseId: string, amount: number, date?: string) => Promise<void>;
@@ -111,14 +120,38 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
     updatePurchase: async (id, data) => {
       await save('purchases.update', () =>
         rpc.updatePurchase(id, {
+          supplier_id: data.supplierId ?? null,
           date: data.date ?? null,
           bon_number: data.bonNumber ?? null,
           driver_plate: data.driverPlate ?? null,
+          is_historical: data.isHistorical ?? null,
           paid_amount: data.paidAmount ?? null,
           note: data.note ?? null,
+          // `products` absent => update_purchase() ne touche ni aux lignes ni au
+          // stock ; présent => il annule l'ancien stock puis réapplique.
+          ...(data.products
+            ? {
+                products: data.products.map((l) => ({
+                  product_id: l.productId,
+                  product_name: l.productName,
+                  quantity: l.quantity,
+                  purchase_price: l.purchasePrice,
+                  min_alert_quantity: l.minAlertQuantity ?? null,
+                  unit_enabled: l.unitEnabled ?? false,
+                  unit: l.unit ?? null,
+                  expiration_enabled: l.expirationEnabled ?? false,
+                  expiration_date: l.expirationDate,
+                })),
+              }
+            : {}),
         })
       );
-      set({ purchases: await db.purchases.list() });
+      // Les lignes ayant pu changer, le stock a bougé : on recharge les deux.
+      const [purchases] = await Promise.all([
+        db.purchases.list(),
+        data.products ? useStockStore.getState().load() : Promise.resolve(),
+      ]);
+      set({ purchases });
     },
 
     paySupplierDebt: payFn,

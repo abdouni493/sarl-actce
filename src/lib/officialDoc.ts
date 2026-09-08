@@ -4,33 +4,37 @@ import { formatCurrency, formatDate } from './utils';
 /* ============================================================================
  *  MODÈLE OFFICIEL DES DOCUMENTS IMPRIMÉS
  * ----------------------------------------------------------------------------
- *  Reproduction fidèle du bon de livraison manuscrit de l'entreprise :
+ *  Papier à en-tête unique de l'entreprise : coordonnées et identifiants à
+ *  GAUCHE, raison sociale + activité au MILIEU, logo à DROITE.
  *
  *      ┌──────────────────────────────────────────────────────────┐
- *      │            SARL ACTCE LOKMANE            (souligné)      │
- *      │      FABRICATION DE BETON PRET A L'EMPLOI (souligné)     │
- *      │            LIEU D'ACTIVITE : BAHLI BLIDA                 │
- *      │  SIEGE SOCIAL : … W. DE BLIDA  TEL : 0556-58-53-42       │
+ *      │ LIEU D'ACTIVITE : BAHLI                                  │
+ *      │ SIEGE SOCIAL : …      SARL ACTCE LOKMANE        ┌──────┐ │
+ *      │ TEL : 0556-58-53-42   FABRICATION DE BETON      │ LOGO │ │
+ *      │ R.C : … NIF : …          PRET A L'EMPLOI        └──────┘ │
+ *      │ NIS : … ART : …                                          │
  *      │                                     BLIDA LE 05/04/2026  │
  *      └──────────────────────────────────────────────────────────┘
  *                        BON DE LIVRAISON            (souligné)
  *        DOIT : HARAZI OULED AICHE
- *      ┌──────┬─────────────┬────────┬──────────┬────────┬────────┐
- *      │ DATE │ DESIGNATION │ DOSAGE │ QUANTITE │  P.U.  │ TOTAL  │
- *      ├──────┼─────────────┼────────┼──────────┼────────┼────────┤
- *      │ …    │ BETON       │  350   │   74,5   │ 8700,00│648150,0│
- *      ├──────┴─────────────┴────────┴──────────┼────────┼────────┤
- *      │                                TOTAL HT│        │  …     │
- *      │                               VERSEMENT│        │  …     │
- *      │                                LE REST │        │  …     │
- *      └────────────────────────────────────────┴────────┴────────┘
- *        VERSEMENT DE 600 000 DA LE 09/06/2026
- *        VERSEMENT DE 400 000 DA LE 13/06/2026
+ *      ┌─────────────┬──────────┬────────────┬──────────────────┐
+ *      │ DESIGNATION │ QUANTITE │ PRIX UNIT. │      TOTAL       │
+ *      ├─────────────┼──────────┼────────────┼──────────────────┤
+ *      │ BETON       │   74,5   │  8 700,00  │    648 150,00    │
+ *      ├─────────────┴──────────┴────────────┼──────────────────┤
+ *      │                             TOTAL HT│        …         │
+ *      │                                  TVA│        …         │
+ *      │                            TOTAL TTC│        …         │
+ *      │                            VERSEMENT│        …         │
+ *      │                              LE REST│        …         │
+ *      └─────────────────────────────────────┴──────────────────┘
  *                                                        SIGNATURE
  *
  *  TOUS les documents de l'application (bon de livraison, bon de commande,
  *  compte rendu, facture de vente, reçu de versement) sont rendus par ce même
  *  moteur : seuls le titre, les colonnes et le bloc de totaux changent.
+ *  Les textes sont volontairement grands et en gras : les bons sont lus sur
+ *  chantier, souvent sur une photocopie.
  * ========================================================================== */
 
 export type Align = 'left' | 'center' | 'right';
@@ -116,114 +120,121 @@ const CSS = `
   body {
     font-family: 'Times New Roman', Times, Georgia, serif;
     color: #000; background: #E9EDF0; padding: 16px;
-    font-size: 12.5px; line-height: 1.35;
+    font-size: 15px; font-weight: 700; line-height: 1.4;
   }
 
-  .toolbar { max-width: 830px; margin: 0 auto 12px; display: flex; justify-content: flex-end; gap: 9px; }
-  .toolbar button { font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; border: 2px solid #000; border-radius: 4px; padding: 8px 20px; background: #000; color: #fff; }
+  .toolbar { max-width: 860px; margin: 0 auto 12px; display: flex; justify-content: flex-end; gap: 9px; }
+  .toolbar button { font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; border: 2px solid #000; border-radius: 4px; padding: 9px 22px; background: #000; color: #fff; }
   .toolbar button.ghost { background: #fff; color: #000; }
 
-  .sheet { max-width: 830px; margin: 0 auto; background: #fff; border: 1.6px solid #000; padding: 12px 14px 16px; }
+  .sheet { max-width: 860px; margin: 0 auto; background: #fff; border: 1.6px solid #000; padding: 12px 14px 16px; }
 
-  /* ---- En-tête encadré, tout centré, façon papier à en-tête ---- */
-  .head { border: 1.4px solid #000; padding: 9px 12px 7px; margin-bottom: 4px; position: relative; }
+  /* ---- En-tête : informations à GAUCHE · raison sociale au MILIEU · logo à DROITE ---- */
+  .head { border: 1.6px solid #000; padding: 10px 12px 8px; margin-bottom: 4px; }
+  .head .row { display: flex; align-items: center; gap: 12px; }
+  .head .info {
+    flex: 0 0 30%; font-size: 12.5px; font-weight: 700; line-height: 1.55;
+    text-transform: uppercase; word-break: break-word;
+  }
+  .head .center { flex: 1 1 auto; text-align: center; }
+  .head .logo-box { flex: 0 0 auto; width: 100px; text-align: right; }
+  .head .logo { width: 96px; height: 96px; object-fit: contain; }
   .head .brand {
-    text-align: center; font-size: 25px; font-weight: 700; letter-spacing: .6px;
-    text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px;
+    font-size: 30px; font-weight: 700; letter-spacing: .6px;
+    text-transform: uppercase; text-decoration: underline; text-underline-offset: 4px;
   }
   .head .activity {
-    text-align: center; font-size: 16px; font-weight: 700; letter-spacing: .3px; margin-top: 4px;
+    font-size: 19px; font-weight: 700; letter-spacing: .3px; margin-top: 5px;
     text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px;
   }
-  .head .place { text-align: center; font-size: 11.5px; font-weight: 700; margin-top: 4px; text-transform: uppercase; letter-spacing: .2px; }
-  .head .legal { text-align: center; font-size: 9.6px; font-weight: 700; margin-top: 2px; text-transform: uppercase; letter-spacing: .1px; }
-  .head .fiscal { text-align: center; font-size: 9.6px; font-weight: 700; margin-top: 2px; text-transform: uppercase; }
-  .head .city { text-align: right; font-size: 12.5px; font-weight: 700; font-style: italic; margin-top: 7px; text-transform: uppercase; }
-  .head .logo { position: absolute; top: 7px; left: 9px; width: 62px; height: 62px; object-fit: contain; }
+  .head .city { text-align: right; font-size: 15px; font-weight: 700; font-style: italic; margin-top: 8px; text-transform: uppercase; }
 
   /* ---- Titre du document ---- */
   .doc-title {
-    text-align: center; font-size: 18px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 1.1px; margin: 12px 0 4px;
+    text-align: center; font-size: 23px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1.2px; margin: 14px 0 5px;
     text-decoration: underline; text-underline-offset: 4px;
   }
-  .meta { text-align: right; font-size: 11px; font-weight: 700; text-transform: uppercase; line-height: 1.55; margin-bottom: 6px; }
+  .meta { text-align: right; font-size: 14px; font-weight: 700; text-transform: uppercase; line-height: 1.6; margin-bottom: 7px; }
 
   /* ---- Bloc DOIT ---- */
-  .doit { font-size: 13px; font-weight: 700; font-style: italic; text-transform: uppercase; margin: 6px 0 8px 4px; }
+  .doit { font-size: 16.5px; font-weight: 700; font-style: italic; text-transform: uppercase; margin: 7px 0 9px 4px; }
   .doit .lbl { text-decoration: underline; text-underline-offset: 2px; }
-  .doit .sub { display: block; font-style: normal; font-size: 11px; font-weight: 700; margin-top: 2px; }
+  .doit .sub { display: block; font-style: normal; font-size: 14px; font-weight: 700; margin-top: 3px; }
 
   /* ---- Tableaux ---- */
-  .sec-title { font-size: 12.5px; font-weight: 700; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; margin: 12px 0 4px 2px; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
-  th, td { border: 1.1px solid #000; padding: 3.5px 5px; font-size: 11.6px; vertical-align: middle; }
-  th { font-weight: 700; text-transform: uppercase; text-align: center; letter-spacing: .3px; background: #fff; }
-  td { font-weight: 400; }
+  .sec-title { font-size: 16px; font-weight: 700; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; margin: 14px 0 5px 2px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 7px; }
+  th, td { border: 1.2px solid #000; padding: 6px 7px; font-size: 14.5px; font-weight: 700; vertical-align: middle; }
+  th { text-transform: uppercase; text-align: center; letter-spacing: .3px; background: #fff; font-size: 14.5px; }
   td.l, th.l { text-align: left; }
   td.c, th.c { text-align: center; }
   td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
-  tr.group td { font-weight: 700; text-transform: uppercase; background: #EDEDED; }
-  tr.subtotal td { font-weight: 700; background: #F6F6F6; }
+  tr.group td { text-transform: uppercase; background: #EDEDED; }
+  tr.subtotal td { background: #F6F6F6; }
   tr { break-inside: avoid; }
-  .empty { text-align: center; font-style: italic; padding: 8px; }
+  .empty { text-align: center; font-style: italic; padding: 10px; font-size: 14.5px; }
 
   /* ---- Totaux collés au pied du tableau ---- */
   .tot-label { text-align: right; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; }
   .tot-value { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
-  tr.grand td { background: #E4E4E4; font-size: 12.6px; }
+  tr.grand td { background: #E4E4E4; font-size: 16.5px; }
 
   /* ---- Montant en lettres ---- */
-  .words { border: 1.1px solid #000; padding: 6px 9px; font-size: 11.5px; margin: 8px 0; }
-  .words b { text-transform: uppercase; font-size: 10px; letter-spacing: .5px; }
+  .words { border: 1.2px solid #000; padding: 8px 10px; font-size: 14.5px; margin: 10px 0; }
+  .words b { text-transform: uppercase; font-size: 13px; letter-spacing: .5px; }
   .words i { font-style: italic; font-weight: 700; }
 
-  .obs { border: 1.1px solid #000; padding: 6px 9px; font-size: 11.5px; margin: 8px 0; }
-  .obs b { text-transform: uppercase; font-size: 10px; letter-spacing: .5px; }
+  .obs { border: 1.2px solid #000; padding: 8px 10px; font-size: 14.5px; margin: 10px 0; }
+  .obs b { text-transform: uppercase; font-size: 13px; letter-spacing: .5px; }
 
-  .stamps { margin: 8px 0 2px; }
-  .stamp { display: inline-block; border: 1.4px solid #000; padding: 2px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; margin-right: 8px; }
+  .stamps { margin: 10px 0 2px; }
+  .stamp { display: inline-block; border: 1.5px solid #000; padding: 3px 12px; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; margin-right: 8px; }
   .stamp.warn { background: #EDEDED; }
 
   /* ---- Pied : versements à gauche, signature à droite ---- */
-  .foot { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin-top: 14px; break-inside: avoid; }
-  .foot .notes { font-size: 11.5px; font-weight: 700; text-transform: uppercase; line-height: 1.7; }
+  .foot { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin-top: 16px; break-inside: avoid; }
+  .foot .notes { font-size: 14.5px; font-weight: 700; text-transform: uppercase; line-height: 1.75; }
   .foot .signs { display: flex; gap: 26px; }
-  .foot .sign { text-align: center; font-size: 12px; font-weight: 700; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; padding-top: 34px; min-width: 120px; }
+  .foot .sign { text-align: center; font-size: 15px; font-weight: 700; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; padding-top: 38px; min-width: 140px; }
 
-  .tag { margin-top: 12px; text-align: center; font-size: 9.5px; font-style: italic; }
+  .tag { margin-top: 12px; text-align: center; font-size: 12.5px; font-style: italic; font-weight: 700; }
 
   @media print {
     body { background: #fff; padding: 0; }
     .toolbar { display: none !important; }
     .sheet { border: none; max-width: none; padding: 0; }
-    @page { size: A4 portrait; margin: 10mm; }
+    @page { size: A4 portrait; margin: 9mm; }
   }
 `;
 
 function headBlock(store: StoreSettings, docDate: string): string {
-  const legal = [
+  // Colonne de GAUCHE : toutes les coordonnées et identifiants de l'entreprise.
+  const info = [
+    store.activityPlace ? `LIEU D'ACTIVITE : ${store.activityPlace}` : '',
     store.address ? `SIEGE SOCIAL : ${store.address}` : '',
     store.phone ? `TEL : ${store.phone}` : '',
-  ].filter(Boolean).join('  ');
-
-  const fiscal = [
+    store.email ? `EMAIL : ${store.email}` : '',
     store.rc ? `R.C : ${store.rc}` : '',
     store.nif ? `NIF : ${store.nif}` : '',
     store.nis ? `NIS : ${store.nis}` : '',
     store.article ? `ART : ${store.article}` : '',
-  ].filter(Boolean).join('  |  ');
+  ].filter(Boolean);
 
   const city = (store.city || '').trim() || firstWord(store.address) || '';
 
   return `
     <div class="head">
-      ${store.logo ? `<img class="logo" src="${store.logo}" alt=""/>` : ''}
-      <div class="brand">${esc(store.name || 'ALTECH PRODUCTION')}</div>
-      ${store.description ? `<div class="activity">${esc(store.description)}</div>` : ''}
-      ${store.activityPlace ? `<div class="place">LIEU D'ACTIVITE : ${esc(store.activityPlace)}</div>` : ''}
-      ${legal ? `<div class="legal">${esc(legal)}</div>` : ''}
-      ${fiscal ? `<div class="fiscal">${esc(fiscal)}</div>` : ''}
+      <div class="row">
+        <div class="info">${info.map(esc).join('<br/>')}</div>
+        <div class="center">
+          <div class="brand">${esc(store.name || 'ALTECH PRODUCTION')}</div>
+          ${store.description ? `<div class="activity">${esc(store.description)}</div>` : ''}
+        </div>
+        <div class="logo-box">
+          ${store.logo ? `<img class="logo" src="${store.logo}" alt=""/>` : ''}
+        </div>
+      </div>
       <div class="city">${city ? `${esc(city)} LE ` : 'LE '}${esc(formatDate(docDate))}</div>
     </div>`;
 }

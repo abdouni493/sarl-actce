@@ -1,10 +1,12 @@
 // ============================================================================
 //  COMPTES RENDUS ET RAPPORTS IMPRIMÉS
 // ----------------------------------------------------------------------------
-//  Même papier à en-tête que le bon de livraison de l'entreprise :
-//  raison sociale soulignée, activité, lieu d'activité, siège social + tél,
-//  mention « <VILLE> LE jj/mm/aaaa », titre du document souligné, bloc
-//  d'identification, puis les sections en tableaux encadrés.
+//  Même papier à en-tête que le bon de livraison de l'entreprise : coordonnées
+//  et identifiants fiscaux à GAUCHE, raison sociale + activité au MILIEU, logo
+//  à DROITE, mention « <VILLE> LE jj/mm/aaaa », titre du document souligné,
+//  bloc d'identification, puis les sections en tableaux encadrés.
+//  Textes volontairement grands et en gras — les documents sont lus sur
+//  chantier, souvent sur une photocopie.
 //
 //  L'API publique (ReportDoc / PrintTableSection / PrintRow / PrintKpi) est
 //  inchangée : compte rendu client, compte rendu fournisseur, rapport de caisse
@@ -69,8 +71,9 @@ function esc(v: unknown): string {
     .replace(/"/g, '&quot;');
 }
 
+// Tout le document est déjà en gras : seule la nuance « muted » reste utile.
 const toneClass: Record<CellTone, string> = {
-  default: '', pos: 'pos', neg: 'neg', muted: 'muted', accent: 'accent',
+  default: '', pos: '', neg: '', muted: 'muted', accent: '',
 };
 
 /** Ville de l'en-tête — réglage du magasin, sinon dernier segment de l'adresse. */
@@ -87,73 +90,77 @@ const css = `
   body {
     font-family: 'Times New Roman', Times, Georgia, serif;
     color: #000; background: #E9EDF0; padding: 16px;
-    font-size: 12.5px; line-height: 1.35;
+    font-size: 15px; font-weight: 700; line-height: 1.4;
   }
 
-  .toolbar { max-width: 900px; margin: 0 auto 12px; display: flex; justify-content: flex-end; gap: 9px; }
-  .toolbar button { font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; border: 2px solid #000; border-radius: 4px; padding: 8px 20px; background: #000; color: #fff; }
+  .toolbar { max-width: 920px; margin: 0 auto 12px; display: flex; justify-content: flex-end; gap: 9px; }
+  .toolbar button { font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; border: 2px solid #000; border-radius: 4px; padding: 9px 22px; background: #000; color: #fff; }
   .toolbar button.ghost { background: #fff; color: #000; }
 
-  .page { max-width: 900px; margin: 0 auto; background: #fff; border: 1.6px solid #000; padding: 12px 14px 16px; }
+  .page { max-width: 920px; margin: 0 auto; background: #fff; border: 1.6px solid #000; padding: 12px 14px 16px; }
 
-  /* En-tête officiel */
-  .head { border: 1.4px solid #000; padding: 9px 12px 7px; position: relative; }
-  .head .brand { text-align: center; font-size: 25px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; }
-  .head .activity { text-align: center; font-size: 16px; font-weight: 700; margin-top: 4px; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; }
-  .head .place { text-align: center; font-size: 11.5px; font-weight: 700; margin-top: 4px; text-transform: uppercase; }
-  .head .legal { text-align: center; font-size: 9.6px; font-weight: 700; margin-top: 2px; text-transform: uppercase; }
-  .head .city { text-align: right; font-size: 12.5px; font-weight: 700; font-style: italic; margin-top: 7px; text-transform: uppercase; }
-  .head .logo { position: absolute; top: 7px; left: 9px; width: 62px; height: 62px; object-fit: contain; }
+  /* En-tête officiel : infos à GAUCHE · raison sociale au MILIEU · logo à DROITE */
+  .head { border: 1.6px solid #000; padding: 10px 12px 8px; }
+  .head .row { display: flex; align-items: center; gap: 12px; }
+  .head .info {
+    flex: 0 0 30%; font-size: 12.5px; font-weight: 700; line-height: 1.55;
+    text-transform: uppercase; word-break: break-word;
+  }
+  .head .center { flex: 1 1 auto; text-align: center; }
+  .head .logo-box { flex: 0 0 auto; width: 100px; text-align: right; }
+  .head .logo { width: 96px; height: 96px; object-fit: contain; }
+  .head .brand { font-size: 30px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; text-decoration: underline; text-underline-offset: 4px; }
+  .head .activity { font-size: 19px; font-weight: 700; margin-top: 5px; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; }
+  .head .city { text-align: right; font-size: 15px; font-weight: 700; font-style: italic; margin-top: 8px; text-transform: uppercase; }
 
-  .doc-title { text-align: center; font-size: 18px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.1px; margin: 12px 0 3px; text-decoration: underline; text-underline-offset: 4px; }
-  .doc-sub { text-align: center; font-size: 12px; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; }
+  .doc-title { text-align: center; font-size: 23px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; margin: 14px 0 4px; text-decoration: underline; text-underline-offset: 4px; }
+  .doc-sub { text-align: center; font-size: 15px; font-weight: 700; text-transform: uppercase; margin-bottom: 10px; }
 
   /* Identification */
-  .meta { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-  .meta td { border: 1.1px solid #000; padding: 3.5px 6px; font-size: 11.4px; }
-  .meta td.k { font-weight: 700; text-transform: uppercase; width: 22%; background: #F2F2F2; }
+  .meta { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+  .meta td { border: 1.2px solid #000; padding: 6px 8px; font-size: 14.5px; font-weight: 700; }
+  .meta td.k { text-transform: uppercase; width: 28%; background: #F2F2F2; }
 
   /* Chiffres clés */
-  .kpis { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
-  .kpis td { border: 1.1px solid #000; padding: 5px 7px; font-size: 11.6px; width: 25%; vertical-align: top; }
-  .kpis .l { font-size: 9.8px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
-  .kpis .v { font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .kpis { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+  .kpis td { border: 1.2px solid #000; padding: 7px 9px; font-size: 14.5px; width: 25%; vertical-align: top; }
+  .kpis .l { font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+  .kpis .v { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 3px; }
 
   /* Sections */
-  .section { margin-bottom: 14px; break-inside: avoid; }
-  .sec-title { display: flex; justify-content: space-between; gap: 10px; font-size: 12.8px; font-weight: 700; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; margin: 0 0 4px 2px; }
-  .sec-note { font-size: 10.8px; font-style: italic; margin: 0 0 4px 2px; }
+  .section { margin-bottom: 16px; break-inside: avoid; }
+  .sec-title { display: flex; justify-content: space-between; gap: 10px; font-size: 16px; font-weight: 700; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; margin: 0 0 5px 2px; }
+  .sec-note { font-size: 13px; font-weight: 700; font-style: italic; margin: 0 0 5px 2px; }
 
   table.data { width: 100%; border-collapse: collapse; }
-  table.data th, table.data td { border: 1.1px solid #000; padding: 3.5px 5px; font-size: 11.4px; vertical-align: top; }
-  table.data th { font-weight: 700; text-transform: uppercase; text-align: left; letter-spacing: .3px; }
+  table.data th, table.data td { border: 1.2px solid #000; padding: 6px 7px; font-size: 14.5px; font-weight: 700; vertical-align: top; }
+  table.data th { text-transform: uppercase; text-align: left; letter-spacing: .3px; }
   table.data thead { display: table-header-group; }
   table.data tr { break-inside: avoid; }
   .al-right, th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .al-center { text-align: center; }
 
-  tr.r-category td { background: #E4E4E4; font-weight: 700; text-transform: uppercase; }
-  tr.r-subheader td { background: #F0F0F0; font-weight: 700; }
-  tr.r-detail td.first { padding-left: 18px; }
-  tr.r-subtotal td { background: #F6F6F6; font-weight: 700; }
-  tr.r-total td { background: #D9D9D9; font-weight: 700; font-size: 12px; }
+  tr.r-category td { background: #E4E4E4; text-transform: uppercase; }
+  tr.r-subheader td { background: #F0F0F0; }
+  tr.r-detail td.first { padding-left: 20px; }
+  tr.r-subtotal td { background: #F6F6F6; }
+  tr.r-total td { background: #D9D9D9; font-size: 16.5px; }
 
-  .pos, .neg, .accent { font-weight: 700; }
   .muted { color: #333; }
 
-  .empty { border: 1.1px solid #000; padding: 8px; text-align: center; font-style: italic; font-size: 11.4px; }
+  .empty { border: 1.2px solid #000; padding: 10px; text-align: center; font-style: italic; font-size: 14.5px; font-weight: 700; }
 
-  .foot { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 16px; break-inside: avoid; }
-  .foot .printed { font-size: 10.5px; font-style: italic; }
-  .foot .sign { text-align: center; font-size: 12px; font-weight: 700; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; padding-top: 34px; min-width: 140px; }
+  .foot { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 18px; break-inside: avoid; }
+  .foot .printed { font-size: 13px; font-weight: 700; font-style: italic; }
+  .foot .sign { text-align: center; font-size: 15px; font-weight: 700; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; padding-top: 38px; min-width: 150px; }
 
-  .tag { margin-top: 10px; text-align: center; font-size: 9.5px; font-style: italic; }
+  .tag { margin-top: 12px; text-align: center; font-size: 12.5px; font-style: italic; font-weight: 700; }
 
   @media print {
     body { background: #fff; padding: 0; }
     .toolbar { display: none !important; }
     .page { border: none; max-width: none; padding: 0; }
-    @page { size: A4; margin: 10mm; }
+    @page { size: A4; margin: 9mm; }
   }
 `;
 
@@ -208,16 +215,17 @@ export function printDetailedReport(doc: ReportDoc, store: StoreSettings, lang: 
   const printBtn = lang === 'ar' ? 'طباعة' : 'Imprimer';
   const closeBtn = lang === 'ar' ? 'إغلاق' : 'Fermer';
 
-  const legal = [
+  // Colonne de GAUCHE de l'en-tête : coordonnées et identifiants fiscaux.
+  const info = [
+    store.activityPlace ? `LIEU D'ACTIVITE : ${store.activityPlace}` : '',
     store.address ? `SIEGE SOCIAL : ${store.address}` : '',
     store.phone ? `TEL : ${store.phone}` : '',
-  ].filter(Boolean).join('  ');
-  const fiscal = [
+    store.email ? `EMAIL : ${store.email}` : '',
     store.rc ? `R.C : ${store.rc}` : '',
     store.nif ? `NIF : ${store.nif}` : '',
     store.nis ? `NIS : ${store.nis}` : '',
     store.article ? `ART : ${store.article}` : '',
-  ].filter(Boolean).join('  |  ');
+  ].filter(Boolean);
   const city = headerCity(store);
 
   const metaHtml = doc.meta && doc.meta.length
@@ -249,12 +257,16 @@ export function printDetailedReport(doc: ReportDoc, store: StoreSettings, lang: 
     </div>
     <div class="page">
       <div class="head">
-        ${store.logo ? `<img class="logo" src="${store.logo}" alt=""/>` : ''}
-        <div class="brand">${esc(store.name || 'ALTECH PRODUCTION')}</div>
-        ${store.description ? `<div class="activity">${esc(store.description)}</div>` : ''}
-        ${store.activityPlace ? `<div class="place">LIEU D'ACTIVITE : ${esc(store.activityPlace)}</div>` : ''}
-        ${legal ? `<div class="legal">${esc(legal)}</div>` : ''}
-        ${fiscal ? `<div class="legal">${esc(fiscal)}</div>` : ''}
+        <div class="row">
+          <div class="info">${info.map(esc).join('<br/>')}</div>
+          <div class="center">
+            <div class="brand">${esc(store.name || 'ALTECH PRODUCTION')}</div>
+            ${store.description ? `<div class="activity">${esc(store.description)}</div>` : ''}
+          </div>
+          <div class="logo-box">
+            ${store.logo ? `<img class="logo" src="${store.logo}" alt=""/>` : ''}
+          </div>
+        </div>
         <div class="city">${city ? `${esc(city)} LE ` : 'LE '}${esc(formatDate(new Date(), lang))}</div>
       </div>
 

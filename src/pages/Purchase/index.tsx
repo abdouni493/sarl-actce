@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ShoppingCart, Plus, Eye, Wallet, Printer, Trash2, Calendar, Folder, DollarSign, TrendingDown, CheckCircle2, FileText, CarFront, History } from 'lucide-react';
+import { ShoppingCart, Plus, Eye, Wallet, Printer, Trash2, Calendar, Folder, DollarSign, TrendingDown, CheckCircle2, FileText, CarFront, History, PencilLine } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { Select } from '@/components/ui/Select';
@@ -41,6 +41,8 @@ export default function PurchasePage() {
   /** Ouvre le même formulaire en mode « ancien achat » (saisie rétroactive). */
   const [createHistoricalOpen, setCreateHistoricalOpen] = useState(false);
   const [viewing, setViewing] = useState<Purchase | null>(null);
+  /** Facture rouverte dans le formulaire de création pour être corrigée. */
+  const [editing, setEditing] = useState<Purchase | null>(null);
   const [paying, setPaying] = useState<Purchase | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
@@ -266,6 +268,15 @@ export default function PurchasePage() {
                   
                   <div className="flex items-center gap-1">
                     <Button size="sm" variant="secondary" className="px-2" onClick={() => setViewing(p)} title={t('view')}><Eye size={13} /></Button>
+                    {can('purchase', 'edit') && (
+                      <Button
+                        size="sm" variant="secondary" className="px-2"
+                        onClick={() => setEditing(p)}
+                        title="Modifier la facture (produits, quantités, prix, règlement)"
+                      >
+                        <PencilLine size={13} className="text-gold-dark" />
+                      </Button>
+                    )}
                     {can('purchase', 'pay') && p.restAmount > 0 && (
                       <Button size="sm" variant="gold" className="text-xs" onClick={() => setPaying(p)}>
                         <Wallet size={13} /> {t('pay')}
@@ -300,6 +311,22 @@ export default function PurchasePage() {
           onClose={() => setCreateHistoricalOpen(false)}
           onCreated={(pur) => setViewing(pur)}
         />
+      </Modal>
+
+      {/* Modification : MÊME formulaire que la création, pré-rempli */}
+      <Modal
+        open={!!editing}
+        onClose={() => setEditing(null)}
+        title={`Modifier la facture ${editing?.reference ?? ''}`}
+        size="lg"
+      >
+        {editing && (
+          <CreatePurchase
+            editing={editing}
+            onClose={() => setEditing(null)}
+            onCreated={(pur) => setViewing(pur)}
+          />
+        )}
       </Modal>
 
       <Modal open={!!viewing} onClose={() => setViewing(null)} title={viewing?.reference} size="md">
@@ -341,7 +368,17 @@ export default function PurchasePage() {
                 ))}
               </div>
             )}
-            <Button variant="outline" onClick={() => handlePrint(viewing)}><Printer size={16} /> {t('print')}</Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => handlePrint(viewing)}><Printer size={16} /> {t('print')}</Button>
+              {can('purchase', 'edit') && (
+                <Button
+                  variant="gold"
+                  onClick={() => { setEditing(viewing); setViewing(null); }}
+                >
+                  <PencilLine size={16} /> Modifier la facture
+                </Button>
+              )}
+            </div>
           </div>
         )}
       </Modal>
