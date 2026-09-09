@@ -13,15 +13,17 @@ import {
  *  fournisseur, fiche de production et reçu d'heures supplémentaires.
  *
  *  Tous partagent EXACTEMENT le même papier à en-tête (`printOfficialDocument`,
- *  cf. `officialDoc.ts`) : coordonnées et identifiants fiscaux à GAUCHE, raison
- *  sociale + activité au MILIEU, logo à DROITE, mention « <VILLE> LE
- *  jj/mm/aaaa », titre du document souligné, bloc « DOIT », tableau encadré,
- *  totaux collés au pied du tableau et signature en bas à droite.
+ *  cf. `officialDoc.ts`), calqué sur le modèle papier de l'entreprise :
+ *  coordonnées et identifiants fiscaux à GAUCHE, raison sociale + activité au
+ *  MILIEU, logo à DROITE, mention « <VILLE> LE jj/mm/aaaa », titre souligné,
+ *  puis « DOIT : client » à gauche et « N° BL : … » à droite sur la MÊME ligne,
+ *  tableau encadré, totaux accrochés aux deux dernières colonnes et, tout en
+ *  bas, « LE CLIENT » à gauche et « SIGNATURE » à droite.
  *
  *  Seules changent les colonnes et le bloc de totaux, selon le contenu propre à
- *  chaque document. Le BON DE LIVRAISON est le plus dépouillé de tous : il ne
- *  porte que la quantité, le prix unitaire, le montant, la TVA, le versement
- *  et le reste.
+ *  chaque document. Le BON DE LIVRAISON reprend les colonnes du modèle à
+ *  l'identique : DÉSIGNATION · ADRESSE DE LIVRAISON · QUANTITÉ · PRIX U ·
+ *  P.T H.T, puis TOTAL H.T · VERSEMENT · RESTE À PAYER.
  * ========================================================================== */
 
 /** Identifiants fiscaux d'un client — imprimés dans le bloc « DOIT ». */
@@ -57,7 +59,8 @@ function qty(n: number): string {
 }
 
 /**
- * Bloc de totaux commun : TOTAL H.T → TVA → TOTAL T.T.C → VERSEMENT → LE REST.
+ * Bloc de totaux commun : TOTAL H.T → TVA → TOTAL T.T.C → VERSEMENT →
+ * RESTE À PAYER, comme sur le modèle papier.
  * La TVA n'apparaît QUE si elle est activée sur le document.
  */
 function totalsBlock(o: {
@@ -80,7 +83,7 @@ function totalsBlock(o: {
   }
   if (o.showPayment) {
     rows.push({ label: 'Versement', value: formatCurrency(o.paid ?? 0) });
-    rows.push({ label: 'Le rest', value: formatCurrency(o.rest ?? 0), strong: true });
+    rows.push({ label: 'Reste à payer', value: formatCurrency(o.rest ?? 0), strong: true });
   }
   return rows;
 }
@@ -150,7 +153,7 @@ export function printPaymentReceipt(data: PaymentReceiptData, store: StoreSettin
               value: formatCurrency(data.amount),
             },
             { label: 'Total payé', value: formatCurrency(data.totalPaid) },
-            { label: 'Le rest', value: formatCurrency(data.restAmount), strong: true },
+            { label: 'Reste à payer', value: formatCurrency(data.restAmount), strong: true },
           ],
         },
       ],
@@ -172,6 +175,11 @@ export function printPaymentReceipt(data: PaymentReceiptData, store: StoreSettin
 
 export interface DeliveryNoteLine {
   productName: string;
+  /**
+   * Adresse de livraison propre à la ligne — colonne « ADRESSE DE LIVRAISON »
+   * du modèle. À défaut, le lieu du bon puis l'adresse du client sont repris.
+   */
+  deliveryAddress?: string;
   /** Quantité commandée par le client. */
   ordered: number;
   /** Quantité remise lors de CETTE livraison. */
@@ -229,11 +237,11 @@ export interface DeliveryNoteData {
 }
 
 /**
- * BON DE LIVRAISON — modèle officiel de l'entreprise, volontairement DÉPOUILLÉ.
- * Le bon ne porte plus que ce que le client doit lire : la marchandise remise
- * avec sa QUANTITÉ, son PRIX UNITAIRE et son MONTANT, puis la TVA, le
- * VERSEMENT et LE REST. Tout le reste (quantités commandées, reste à livrer,
- * situation de la commande, chauffeur, lieu, mentions…) a été retiré.
+ * BON DE LIVRAISON — reprise EXACTE du modèle papier de l'entreprise :
+ * « DOIT : client » à gauche, « N° BL : … » à droite, puis le tableau
+ * DÉSIGNATION · ADRESSE DE LIVRAISON · QUANTITÉ · PRIX U · P.T H.T, les totaux
+ * TOTAL H.T / VERSEMENT / RESTE À PAYER accrochés à droite, et enfin
+ * « LE CLIENT » à gauche et « SIGNATURE » à droite.
  */
 export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) {
   const ht = data.deliveryTotalHt ?? data.lines.reduce((s, l) => s + l.deliveredNow * l.unitPrice, 0);
@@ -243,10 +251,13 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
   const ttc = data.deliveryTotalTtc ?? ht + tvaAmount;
   const paid = data.deliveryPaid ?? 0;
   const rest = data.deliveryRest ?? Math.max(0, ttc - paid);
+  // Adresse par défaut : le lieu réellement livré, sinon l'adresse du client.
+  const address = (data.location || data.clientAddress || '').trim();
 
   const rows: DocRow[] = data.lines.map((l) => ({
     cells: [
       l.productName.toUpperCase(),
+      ((l.deliveryAddress || address) || '/').toUpperCase(),
       qty(l.deliveredNow),
       formatCurrency(l.unitPrice),
       formatCurrency(l.deliveredNow * l.unitPrice),
@@ -258,14 +269,15 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
       title: data.historical ? 'ANCIENNE LIVRAISON' : 'BON DE LIVRAISON',
       docDate: data.deliveredAt,
       doitName: data.clientName,
-      metaLines: [`N° ${data.reference}`],
+      metaLines: [`N° BL : ${data.reference}`],
       tables: [
         {
           columns: [
             { label: 'Désignation', align: 'left' },
-            { label: 'Quantité', align: 'center', width: '16%' },
-            { label: 'Prix unitaire', align: 'right', width: '20%' },
-            { label: 'Total', align: 'right', width: '22%' },
+            { label: 'Adresse de livraison', align: 'left', width: '24%' },
+            { label: 'Quantité', align: 'center', width: '13%' },
+            { label: 'Prix U', align: 'right', width: '17%' },
+            { label: 'P.T H.T', align: 'right', width: '19%' },
           ],
           rows,
           totals: totalsBlock({
@@ -310,9 +322,9 @@ export interface DeliveryPeriodReportData {
 }
 
 /**
- * BON DE LIVRAISON SUR UNE PÉRIODE — même document dépouillé que le bon
- * unitaire : une ligne par remise (DESIGNATION · QUANTITE · PRIX UNITAIRE ·
- * TOTAL) puis TOTAL H.T / T.V.A / TOTAL T.T.C / VERSEMENT / LE REST.
+ * BON DE LIVRAISON SUR UNE PÉRIODE — mêmes colonnes que le bon unitaire :
+ * DÉSIGNATION · ADRESSE DE LIVRAISON · QUANTITÉ · PRIX U · P.T H.T, puis
+ * TOTAL H.T / T.V.A / TOTAL T.T.C / VERSEMENT / RESTE À PAYER.
  */
 export function printDeliveryPeriodReport(data: DeliveryPeriodReportData, store: StoreSettings) {
   const ht = data.lines.reduce((s, l) => s + l.amount, 0);
@@ -325,6 +337,7 @@ export function printDeliveryPeriodReport(data: DeliveryPeriodReportData, store:
   const rows: DocRow[] = data.lines.map((l) => ({
     cells: [
       l.designation.toUpperCase(),
+      (l.location || data.client.address || '/').toUpperCase(),
       qty(l.quantity),
       formatCurrency(l.unitPrice),
       formatCurrency(l.amount),
@@ -336,14 +349,16 @@ export function printDeliveryPeriodReport(data: DeliveryPeriodReportData, store:
       title: 'BON DE LIVRAISON',
       docDate: data.to,
       doitName: data.client.name,
+      doitLines: fiscalLines(data.client),
       metaLines: [`LIVRAISON DU ${formatDate(data.from)} AU ${formatDate(data.to)}`],
       tables: [
         {
           columns: [
             { label: 'Désignation', align: 'left' },
-            { label: 'Quantité', align: 'center', width: '16%' },
-            { label: 'Prix unitaire', align: 'right', width: '20%' },
-            { label: 'Total', align: 'right', width: '22%' },
+            { label: 'Adresse de livraison', align: 'left', width: '24%' },
+            { label: 'Quantité', align: 'center', width: '13%' },
+            { label: 'Prix U', align: 'right', width: '17%' },
+            { label: 'P.T H.T', align: 'right', width: '19%' },
           ],
           rows,
           totals: totalsBlock({
@@ -353,7 +368,8 @@ export function printDeliveryPeriodReport(data: DeliveryPeriodReportData, store:
           emptyLabel: 'Aucune livraison sur la période',
         },
       ],
-      signatures: ['Signature'],
+      footNotes: (data.versements ?? []).map((v) => versementLine(v.amount, v.date)),
+      signatures: ['Le client', 'Signature'],
       fileName: `Livraisons_${data.client.name.replace(/\s+/g, '_')}`,
     },
     store
@@ -364,6 +380,8 @@ export function printDeliveryPeriodReport(data: DeliveryPeriodReportData, store:
 
 export interface CommandOrderLine {
   productName: string;
+  /** Adresse de livraison de la ligne — colonne du modèle papier. */
+  deliveryAddress?: string;
   /** Quantité commandée par le client. */
   quantity: number;
   /** Quantité déjà livrée, toutes livraisons confondues. */
@@ -409,9 +427,10 @@ export interface CommandOrderData {
 }
 
 /**
- * BON DE COMMANDE CLIENT — même papier que le bon de livraison, colonnes
- * adaptées au contenu : ce qui est commandé, ce qui est déjà livré et ce qui
- * reste à livrer, puis TOTAL H.T / TVA / TOTAL T.T.C / VERSEMENT / LE REST.
+ * BON DE COMMANDE CLIENT — même modèle que le bon de livraison : DÉSIGNATION ·
+ * ADRESSE DE LIVRAISON · QUANTITÉ · PRIX U · P.T H.T, complété par le suivi de
+ * la commande (quantité déjà livrée et reste à livrer), puis TOTAL H.T / TVA /
+ * TOTAL T.T.C / VERSEMENT / RESTE À PAYER.
  */
 export function printCommandOrder(data: CommandOrderData, store: StoreSettings) {
   const ordered = data.lines.reduce((s, l) => s + l.quantity, 0);
@@ -424,14 +443,17 @@ export function printCommandOrder(data: CommandOrderData, store: StoreSettings) 
     : 0;
   const ttc = data.totalTtc ?? data.totalAmount + tvaAmount;
 
+  const address = (data.clientAddress || '').trim();
+
   const rows: DocRow[] = data.lines.map((l) => {
     const done = l.deliveredQuantity ?? 0;
     const left = Math.max(0, l.quantity - done);
+    const u = dosage(l.unit) === '/' ? '' : ` ${l.unit}`;
     return {
       cells: [
         l.productName.toUpperCase(),
-        dosage(l.unit),
-        qty(l.quantity),
+        ((l.deliveryAddress || address) || '/').toUpperCase(),
+        `${qty(l.quantity)}${u}`,
         qty(done),
         left > 0 ? qty(left) : 'COMPLET',
         formatCurrency(l.unitPrice),
@@ -450,7 +472,7 @@ export function printCommandOrder(data: CommandOrderData, store: StoreSettings) 
         rc: data.clientRc, nif: data.clientNif, nis: data.clientNis, article: data.clientArticle,
       }),
       metaLines: [
-        `RÉF : ${data.reference}`,
+        `N° BC : ${data.reference}`,
         data.bonNumber ? `N° BON : ${data.bonNumber}` : '',
         `CRÉÉE LE : ${formatDate(data.createdAt.slice(0, 10))}`,
         `LIVRAISON PRÉVUE : ${formatDate(data.receiveDate)} À ${data.receiveHour}H${data.receiveMinute}`,
@@ -461,12 +483,12 @@ export function printCommandOrder(data: CommandOrderData, store: StoreSettings) 
         {
           columns: [
             { label: 'Désignation', align: 'left' },
-            { label: 'Dosage', align: 'center', width: '9%' },
+            { label: 'Adresse de livraison', align: 'left', width: '19%' },
             { label: 'Quantité', align: 'center', width: '11%' },
-            { label: 'Qté livrée', align: 'center', width: '11%' },
+            { label: 'Qté livrée', align: 'center', width: '10%' },
             { label: 'Reste à livrer', align: 'center', width: '11%' },
-            { label: 'Prix unitaire', align: 'right', width: '15%' },
-            { label: 'Total', align: 'right', width: '17%' },
+            { label: 'Prix U', align: 'right', width: '14%' },
+            { label: 'P.T H.T', align: 'right', width: '16%' },
           ],
           rows,
           totals: totalsBlock({
@@ -503,30 +525,39 @@ export interface PurchaseOrderData {
   date: string;
   supplierName?: string;
   notes?: string;
+  /** Lieu où la marchandise doit être livrée — par défaut le siège / chantier. */
+  deliveryAddress?: string;
   items: { productName: string; description: string; quantity: number; unit?: string }[];
 }
 
+/**
+ * BON DE COMMANDE FOURNISSEUR — même modèle papier : DÉSIGNATION ·
+ * ADRESSE DE LIVRAISON · QUANTITÉ, « LE DEMANDEUR » à gauche et
+ * « SIGNATURE » à droite.
+ */
 export function printPurchaseOrder(data: PurchaseOrderData, store: StoreSettings) {
+  const address = (data.deliveryAddress || store.activityPlace || store.address || '').trim();
+
   printOfficialDocument(
     {
       title: 'BON DE COMMANDE FOURNISSEUR',
       docDate: data.date,
       doitLabel: 'FOURNISSEUR',
       doitName: data.supplierName || '—',
-      metaLines: [`N° ${data.reference}`, `DATE : ${formatDate(data.date)}`],
+      metaLines: [`N° BC : ${data.reference}`, `DATE : ${formatDate(data.date)}`],
       tables: [
         {
           columns: [
             { label: 'N°', align: 'center', width: '7%' },
             { label: 'Désignation', align: 'left' },
-            { label: 'Description', align: 'left' },
+            { label: 'Adresse de livraison', align: 'left', width: '26%' },
             { label: 'Quantité', align: 'center', width: '16%' },
           ],
           rows: data.items.map((i, idx) => ({
             cells: [
               String(idx + 1),
-              i.productName.toUpperCase(),
-              i.description || '—',
+              (i.productName + (i.description ? ` — ${i.description}` : '')).toUpperCase(),
+              (address || '/').toUpperCase(),
               `${qty(i.quantity)} ${dosage(i.unit) === '/' ? '' : i.unit}`.trim(),
             ],
           })),

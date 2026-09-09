@@ -6,7 +6,10 @@ import { printOfficialDocument, versementLine, type DocRow, type DocTotal } from
 /* ============================================================================
  *  FACTURES D'ACHAT / DE VENTE — papier à en-tête officiel
  * ----------------------------------------------------------------------------
- *  Même modèle que le bon de livraison de l'entreprise (`officialDoc.ts`).
+ *  Même modèle papier que le bon de livraison de l'entreprise
+ *  (`officialDoc.ts`) : « FOURNISSEUR : … » à gauche et « N° FACTURE : … » à
+ *  droite, tableau DÉSIGNATION · ADRESSE DE LIVRAISON · QUANTITÉ · PRIX U ·
+ *  P.T H.T, totaux accrochés à droite et signatures au pied de page.
  *  Utilisé par « Achats » et par l'historique d'un fournisseur.
  * ========================================================================== */
 
@@ -69,14 +72,20 @@ export function printInvoice(data: InvoiceData, store: StoreSettings) {
     totals.push({ label: 'Net à payer', value: formatCurrency(net), strong: true });
   }
   totals.push({ label: 'Versement', value: formatCurrency(data.paid) });
-  totals.push({ label: 'Le rest', value: formatCurrency(data.rest), strong: true });
+  totals.push({ label: 'Reste à payer', value: formatCurrency(data.rest), strong: true });
+
+  /* Colonne « ADRESSE DE LIVRAISON » du modèle : sur un ACHAT c'est notre
+     propre site qui reçoit la marchandise, sur une VENTE celui du client. */
+  const address = (
+    isPurchase ? store.activityPlace || store.address : data.partyAddress || store.address
+  )?.trim() || '';
 
   const rows: DocRow[] = data.lines.map((l, i) => ({
     cells: [
       String(i + 1),
       l.designation.toUpperCase(),
-      l.unit && l.unit.trim() ? l.unit : '/',
-      qty(l.quantity),
+      (address || '/').toUpperCase(),
+      `${qty(l.quantity)}${l.unit && l.unit.trim() ? ` ${l.unit}` : ''}`,
       formatCurrency(l.unitPrice),
       formatCurrency(l.quantity * l.unitPrice),
     ],
@@ -93,7 +102,7 @@ export function printInvoice(data: InvoiceData, store: StoreSettings) {
         data.partyPhone ? `TEL : ${data.partyPhone}` : '',
       ].filter(Boolean),
       metaLines: [
-        `N° ${data.reference}`,
+        `N° FACTURE : ${data.reference}`,
         `DATE : ${isPurchase ? formatDate(data.date) : formatDateTime(data.date)}`,
         data.bonNumber ? `N° BON : ${data.bonNumber}` : '',
         data.driverPlate ? `MATRICULE : ${data.driverPlate}` : '',
@@ -103,10 +112,10 @@ export function printInvoice(data: InvoiceData, store: StoreSettings) {
           columns: [
             { label: 'N°', align: 'center', width: '6%' },
             { label: 'Désignation', align: 'left' },
-            { label: 'Dosage', align: 'center', width: '9%' },
+            { label: 'Adresse de livraison', align: 'left', width: '21%' },
             { label: 'Quantité', align: 'center', width: '12%' },
-            { label: 'Prix unitaire', align: 'right', width: '17%' },
-            { label: 'Total', align: 'right', width: '18%' },
+            { label: 'Prix U', align: 'right', width: '16%' },
+            { label: 'P.T H.T', align: 'right', width: '17%' },
           ],
           rows,
           totals,
@@ -124,7 +133,7 @@ export function printInvoice(data: InvoiceData, store: StoreSettings) {
       ],
       footNotes: [
         data.paid > 0 ? versementLine(data.paid, data.date) : '',
-        data.rest > 0 ? `LE REST : ${formatCurrency(data.rest)}` : '',
+        data.rest > 0 ? `RESTE À PAYER : ${formatCurrency(data.rest)}` : '',
       ].filter(Boolean),
       signatures: [isPurchase ? 'Le fournisseur' : 'Le client', 'Signature'],
       fileName: `${isPurchase ? 'Facture_Achat' : 'Facture_Vente'}_${data.reference}`,

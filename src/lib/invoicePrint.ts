@@ -4,9 +4,11 @@
 //  Rendue sur le papier à en-tête officiel de l'entreprise (`officialDoc.ts`),
 //  identique au bon de livraison : coordonnées et identifiants fiscaux à
 //  GAUCHE, raison sociale + activité au MILIEU, logo à DROITE, mention
-//  « <VILLE> LE jj/mm/aaaa », bloc « DOIT », tableau encadré des articles,
-//  TOTAL H.T / TVA / TOTAL T.T.C / VERSEMENT / LE REST, montant en lettres,
-//  versements en bas à gauche, signature à droite.
+//  « <VILLE> LE jj/mm/aaaa », « DOIT : client » à gauche et « N° FACTURE : … »
+//  à droite, tableau DÉSIGNATION · ADRESSE DE LIVRAISON · QUANTITÉ · PRIX U ·
+//  P.T H.T, totaux TOTAL H.T / TVA / TOTAL T.T.C / VERSEMENT / RESTE À PAYER
+//  accrochés à droite, montant en lettres, versements en bas à gauche et
+//  « LE CLIENT » / « SIGNATURE » au pied de page.
 //
 //  La TVA n'apparaît que si elle a été activée sur la vente.
 //  Ce fichier exporte aussi `amountInWords()`, utilisé par tous les documents.
@@ -179,14 +181,17 @@ export function printSaleInvoice(data: SaleInvoiceData, store: StoreSettings) {
     totals.push({ label: 'Net à payer', value: formatCurrency(data.final), strong: true });
   }
   totals.push({ label: 'Versement', value: formatCurrency(data.paid) });
-  totals.push({ label: 'Le rest', value: formatCurrency(data.rest), strong: true });
+  totals.push({ label: 'Reste à payer', value: formatCurrency(data.rest), strong: true });
+
+  // Colonne « ADRESSE DE LIVRAISON » du modèle papier.
+  const address = (data.client.address || '').trim();
 
   const lineRows: DocRow[] = data.lines.map((l, i) => ({
     cells: [
       String(i + 1),
       l.designation.toUpperCase() + (l.description ? ` — ${l.description}` : ''),
-      l.unit && l.unit.trim() ? l.unit : '/',
-      qty(l.quantity),
+      (address || '/').toUpperCase(),
+      qty(l.quantity, l.unit),
       formatCurrency(l.unitPrice),
       formatCurrency(l.quantity * l.unitPrice),
     ],
@@ -197,10 +202,10 @@ export function printSaleInvoice(data: SaleInvoiceData, store: StoreSettings) {
       columns: [
         { label: 'N°', align: 'center', width: '6%' },
         { label: 'Désignation', align: 'left' },
-        { label: 'Dosage', align: 'center', width: '9%' },
+        { label: 'Adresse de livraison', align: 'left', width: '21%' },
         { label: 'Quantité', align: 'center', width: '12%' },
-        { label: 'Prix unitaire', align: 'right', width: '17%' },
-        { label: 'Total', align: 'right', width: '18%' },
+        { label: 'Prix U', align: 'right', width: '16%' },
+        { label: 'P.T H.T', align: 'right', width: '17%' },
       ],
       rows: lineRows,
       totals,
@@ -254,7 +259,7 @@ export function printSaleInvoice(data: SaleInvoiceData, store: StoreSettings) {
         data.client.phone ? `TEL : ${data.client.phone}` : '',
       ].filter(Boolean),
       metaLines: [
-        `N° ${data.reference}`,
+        `N° FACTURE : ${data.reference}`,
         `DATE : ${formatDateTime(data.date)}`,
         data.deliveryReference ? `BON DE LIVRAISON : ${data.deliveryReference}` : '',
         data.commandReference ? `COMMANDE : ${data.commandReference}` : '',
@@ -273,7 +278,7 @@ export function printSaleInvoice(data: SaleInvoiceData, store: StoreSettings) {
       ],
       footNotes: [
         data.paid > 0 ? versementLine(data.paid, data.date) : '',
-        data.rest > 0 ? `LE REST : ${formatCurrency(data.rest)}` : '',
+        data.rest > 0 ? `RESTE À PAYER : ${formatCurrency(data.rest)}` : '',
       ].filter(Boolean),
       signatures: ['Le client', 'Signature'],
       fileName: `Facture_${data.reference}`,
