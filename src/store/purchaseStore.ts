@@ -4,6 +4,8 @@ import { db, rpc } from '@/lib/db';
 import { save } from '@/lib/persist';
 import { toast } from '@/components/ui/Toast';
 import { useStockStore } from './stockStore';
+import { useCaisseStore } from './caisseStore';
+import { ignoredEdits } from '@/lib/purchaseEdit';
 
 export type AddPurchaseInput = Omit<
   Purchase,
@@ -128,7 +130,9 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
           paid_amount: data.paidAmount ?? null,
           note: data.note ?? null,
           // `products` absent => update_purchase() ne touche ni aux lignes ni au
-          // stock ; présent => il annule l'ancien stock puis réapplique.
+          // stock ; présent => il remplace les lignes et corrige le stock de
+          // l'ÉCART entre l'ancienne et la nouvelle quantité, produit par
+          // produit (la marchandise déjà vendue n'est donc jamais recomptée).
           ...(data.products
             ? {
                 products: data.products.map((l) => ({
@@ -146,12 +150,24 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
             : {}),
         })
       );
-      // Les lignes ayant pu changer, le stock a bougé : on recharge les deux.
+      // update_purchase() réconcilie le stock par écart et refait le règlement :
+      // les trois écrans concernés sont rechargés depuis la base.
       const [purchases] = await Promise.all([
         db.purchases.list(),
         data.products ? useStockStore.getState().load() : Promise.resolve(),
+        useCaisseStore.getState().load(),
       ]);
       set({ purchases });
+
+      const saved = purchases.find((p) => p.id === id);
+      const ignored = saved ? ignoredEdits(saved, data) : [];
+      if (ignored.length > 0) {
+        toast.error(
+          `Base de données non à jour : ${ignored.join(', ')} n'a pas été enregistré. ` +
+          'Exécutez altech_production_update_achat_modification_stock.sql.'
+        );
+        throw new Error(`update_purchase obsolète — ignoré : ${ignored.join(', ')}`);
+      }
     },
 
     paySupplierDebt: payFn,

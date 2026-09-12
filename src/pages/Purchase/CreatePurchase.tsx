@@ -35,8 +35,8 @@ interface CreatePurchaseProps {
 
 interface Line extends PurchaseLine {
   _key: string;
-  /** Stock du produit SANS cette facture — sert à montrer l'impact réel. */
-  stockBefore: number;
+  /** Stock réel du produit aujourd'hui, tel qu'il figure dans /stock. */
+  stockCurrent: number;
   /** Quantité déjà enregistrée sur cette ligne (0 pour une ligne ajoutée). */
   originalQuantity: number;
 }
@@ -66,8 +66,9 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
   const [saving, setSaving] = useState(false);
 
   // ---- Pré-remplissage en modification -----------------------------------
-  // Le stock affiché doit être celui d'AVANT la facture : les quantités déjà
-  // enregistrées ont alimenté le produit (sauf pour un ancien achat).
+  // La base réconcilie le stock PAR ÉCART (nouvelle quantité − ancienne) : on
+  // garde donc le stock réel d'aujourd'hui et la quantité déjà facturée, ce
+  // qui suffit à annoncer exactement le stock qui sera obtenu.
   useEffect(() => {
     if (!editing) return;
     setSupplierId(editing.supplierId);
@@ -80,7 +81,6 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
     setLines(
       editing.products.map((l, i) => {
         const prod = products.find((p) => p.id === l.productId);
-        const fed = editing.isHistorical ? 0 : l.quantity;
         return {
           ...l,
           _key: `${l.productId}-${i}`,
@@ -88,8 +88,9 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
           purchasePrice: Number(l.purchasePrice),
           minAlertQuantity: l.minAlertQuantity ?? prod?.minAlertQuantity ?? 0,
           unit: l.unit || prod?.unit || '',
-          originalQuantity: Number(l.quantity),
-          stockBefore: Math.max(0, (prod?.currentQuantity ?? 0) - fed),
+          // Un ancien achat n'a jamais alimenté le stock : son écart est nul.
+          originalQuantity: editing.isHistorical ? 0 : Number(l.quantity),
+          stockCurrent: prod?.currentQuantity ?? 0,
         };
       })
     );
@@ -133,7 +134,7 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
         unit: p.unit || '',
         expirationEnabled: p.expirationEnabled,
         expirationDate: p.expirationDate,
-        stockBefore: p.currentQuantity,
+        stockCurrent: p.currentQuantity,
         originalQuantity: 0,
       },
     ]);
@@ -173,7 +174,7 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
     }
     setSaving(true);
     try {
-      const payloadLines = lines.map(({ _key, stockBefore, originalQuantity, ...l }) => ({
+      const payloadLines = lines.map(({ _key, stockCurrent, originalQuantity, ...l }) => ({
         ...l,
         quantity: Number(l.quantity),
         purchasePrice: Number(l.purchasePrice),
@@ -241,7 +242,7 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
               <AlertTriangle size={13} className="mt-0.5 shrink-0 text-caramel" />
               {isHistorical
                 ? "Ancien achat : le stock actuel reste inchangé, seuls l'historique et la dette du fournisseur suivent."
-                : 'Les anciennes quantités seront retirées du stock puis les nouvelles réinjectées ; la caisse et la dette du fournisseur suivent le nouveau règlement.'}
+                : "Le stock n'est corrigé que de l'écart entre l'ancienne et la nouvelle quantité — la marchandise déjà vendue n'est donc jamais recomptée. La fiche produit, la caisse et la dette du fournisseur suivent."}
             </li>
           </ul>
         </div>
@@ -316,6 +317,10 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
             const qty = Number(l.quantity) || 0;
             const price = Number(l.purchasePrice) || 0;
             const unit = l.unit || '';
+            // Écart réellement appliqué au stock par la base : en création la
+            // quantité entière, en modification la seule différence.
+            const delta = qty - l.originalQuantity;
+            const newStock = Math.max(0, l.stockCurrent + delta);
             return (
               <div key={l._key} className="rounded-xl border border-gold/15 bg-gradient-card p-3.5">
                 <div className="flex items-start justify-between gap-2 mb-3">
@@ -326,7 +331,7 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
                       Unité du produit :
                       <span className="font-bold text-gold-dark">{unit || 'non définie'}</span>
                       <span className="text-text-muted/70">
-                        · stock hors facture {l.stockBefore}{unit ? ` ${unit}` : ''}
+                        · stock actuel {l.stockCurrent}{unit ? ` ${unit}` : ''}
                       </span>
                     </p>
                   </div>
@@ -379,11 +384,12 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
                       </p>
                       {isHistorical ? (
                         <p className="text-xs font-bold tabular text-caramel">
-                          {l.stockBefore}{unit ? ` ${unit}` : ''} · inchangé
+                          {l.stockCurrent}{unit ? ` ${unit}` : ''} · inchangé
                         </p>
                       ) : (
                         <p className="text-xs font-bold tabular text-pistachio">
-                          {l.stockBefore} + {qty} = {l.stockBefore + qty}{unit ? ` ${unit}` : ''}
+                          {l.stockCurrent} {delta < 0 ? '−' : '+'} {Math.abs(delta)} = {newStock}
+                          {unit ? ` ${unit}` : ''}
                         </p>
                       )}
                     </div>

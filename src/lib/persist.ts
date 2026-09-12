@@ -37,6 +37,11 @@ export async function trySave<T>(label: string, run: () => Promise<T>): Promise<
 function humanize(message: string): string {
   const m = message.replace(/^\[[^\]]+\]\s*/, '');
   if (/duplicate key|already exists/i.test(m)) return 'cet enregistrement existe déjà';
+  // Le stock d'un produit ne peut pas devenir négatif (products_qty_positive).
+  if (/products_qty_positive/i.test(m))
+    return "le stock d'un produit deviendrait négatif ; mettez la base à jour " +
+           '(altech_production_update_achat_modification_stock.sql)';
+  if (/violates check constraint/i.test(m)) return 'une valeur saisie est refusée par la base';
   if (/violates foreign key/i.test(m)) return 'un élément lié est introuvable';
   if (/row-level security|permission denied/i.test(m)) return "vous n'avez pas la permission";
   if (/JWT|not authenticated/i.test(m)) return 'session expirée, reconnectez-vous';
